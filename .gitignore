@@ -1,0 +1,12 @@
+# Keep builder metadata and local export/runtime state out of the public repo.
+.openai/
+.practice-cache/
+.workflow-venv/
+runs/
+*.pt
+*.pth
+*.sqlite
+*.sqlite3
+*.db
+.env
+.env.*

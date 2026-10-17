@@ -1,0 +1,128 @@
+name: Deploy static practice site
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: github-pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Check out the committed static bundle
+        uses: actions/checkout@v6
+
+      - name: Validate Pages bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s dist/index.html
+          test -d dist
+
+          python3 - <<'PY'
+          import hashlib, json
+          from html.parser import HTMLParser
+          from pathlib import Path
+
+          root = Path("dist").resolve()
+          class Assets(HTMLParser):
+              def handle_starttag(self, tag, attrs):
+                  attrs = dict(attrs)
+                  for name in ("src", "href"):
+                      value = attrs.get(name)
+                      if value:
+                          if value.startswith(("http://", "https://", "//")):
+                              is_script = tag == "script" and name == "src"
+                              is_stylesheet = tag == "link" and name == "href" and "stylesheet" in attrs.get("rel", "").split()
+                              if is_script or is_stylesheet:
+                                  raise SystemExit(f"External runtime asset is not self-hosted: {value}")
+                          refs.append(value)
+
+          refs = []
+          parser = Assets()
+          parser.feed((root / "index.html").read_text(encoding="utf-8"))
+          for ref in refs:
+              if ref.startswith(("#", "data:", "https://", "http://", "mailto:", "tel:", "//")):
+                  continue
+              if ref.startswith("/"):
+                  raise SystemExit(f"Root-relative asset breaks repository Pages paths: {ref}")
+              path = (root / ref.split("?", 1)[0]).resolve()
+              if root not in path.parents and path != root:
+                  raise SystemExit(f"Index asset escapes dist/: {ref}")
+              if not path.is_file():
+                  raise SystemExit(f"Missing local index asset: {ref}")
+
+          files = [path for path in root.rglob("*") if path.is_file()]
+          forbidden = (".pt", ".pth", ".sqlite", ".sqlite3", ".db")
+          for path in files:
+              if ".openai" in path.parts or path.name.startswith(".env") or path.name.endswith(forbidden):
+                  raise SystemExit(f"Operational or private file included in dist/: {path.relative_to(root)}")
+              if path.stat().st_size > 100 * 1024 * 1024:
+                  raise SystemExit(f"File exceeds GitHub's 100 MiB Git file limit: {path.relative_to(root)}")
+
+          models = [path for path in files if path.suffix == ".onnx"]
+          if not models:
+              raise SystemExit("No self-hosted ONNX model found in dist/")
+          for path in models:
+              if path.stat().st_size > 25 * 1024 * 1024:
+                  raise SystemExit(f"ONNX model exceeds the 25 MiB repository target: {path.relative_to(root)}")
+
+          config = json.loads((root / "config.json").read_text())
+          if config.get("execution") != "browser":
+              raise SystemExit("Deployment must use browser-only execution")
+          def local_file(ref):
+              if not isinstance(ref, str) or not ref.startswith("./") or ":" in ref or "?" in ref or "#" in ref:
+                  raise SystemExit("Model asset is not a relative static file")
+              path = (root / ref).resolve()
+              if root not in path.parents or not path.is_file() or path.is_symlink():
+                  raise SystemExit("Model asset escapes or is missing from dist/")
+              return path
+          for model in config["models"]:
+              manifest = json.loads(local_file(model["manifest_url"]).read_text())
+              if manifest["model_id"] != model["id"] or manifest["sha256"] != model["sha256"]:
+                  raise SystemExit("Model identity mismatch")
+              hashes = manifest["asset_sha256"]
+              for ref in manifest["assets"].values():
+                  if ref not in hashes:
+                      raise SystemExit("Model asset has no expected SHA")
+              for ref, expected in hashes.items():
+                  with local_file(ref).open("rb") as stream:
+                      if hashlib.file_digest(stream, "sha256").hexdigest() != expected:
+                          raise SystemExit("Static model/runtime asset SHA mismatch")
+              if hashes[manifest["model_url"]] != manifest["onnx_sha256"]:
+                  raise SystemExit("Exported ONNX identity mismatch")
+
+          total = sum(path.stat().st_size for path in files)
+          if total > 1024 * 1024 * 1024:
+              raise SystemExit("Pages bundle exceeds GitHub's 1 GiB published-site limit")
+          print(f"Validated {len(files)} files ({total:,} bytes), including {len(models)} ONNX model(s).")
+          PY
+
+          touch dist/.nojekyll
+
+      - name: Upload static site artifact
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: dist/
+          include-hidden-files: true
+          retention-days: 1
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
