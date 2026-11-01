@@ -141,7 +141,7 @@ async function setupBackend(){
  cancel();controls.playing=false;backendReady=false;const requested=backend(),model=doc.model_id;render();
  try{if(requested==='local'){
  if(globalThis.isSecureContext===false)throw Error('기기 내 추론은 HTTPS 주소로 접속해 주세요. IP의 HTTP 주소에서는 Mac 계산을 사용할 수 있어요.');
- if(!config.browser_models?.includes(model))throw Error('이 모델의 브라우저 실행 파일이 준비되지 않았어요. 사용법의 준비 명령을 실행해 주세요.');
+ if(!config.browser_models?.includes(model))throw Error(staticOnly?'이 기보의 모델은 사이트에서 제외됐어요. 기보와 메모는 보존돼요. 사용 모델에서 세대 모델을 선택해 주세요.':'이 모델의 브라우저 실행 파일이 준비되지 않았어요. 사용법의 준비 명령을 실행해 주세요.');
  $('runtime-note').textContent='모델을 이 기기에 불러오는 중…';local?.close();local=new LocalEngine();localModel=null;const current=local,manifest=staticOnly?await loadStaticManifest(config,model):await api(`browser-model/${model}`),status=await current.initialize(manifest,progress=>{if(local!==current)return;$('runtime-note').textContent=({runtime:'실행 파일을 불러오는 중…',model:'모델을 기기에 내려받는 중…',session:'기기에서 모델을 준비하는 중…'}[progress.stage]||'기기 내 엔진 준비 중…');});
  if(requested!==backend()||model!==doc.model_id||local!==current)return;
  localModel=model;$('runtime-note').textContent=`이 기기에서 계산 · ${status.execution_provider||status.backend||status.provider||'WebGPU / WASM'} · 서버 추론 없음`;
