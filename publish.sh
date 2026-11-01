@@ -29,6 +29,9 @@ else
   git remote add origin "$1"
 fi
 git add -- .gitignore README.md publish.sh .github/workflows/pages.yml dist
+if [ -d model-files ]; then
+  git add -- model-files
+fi
 if ! git diff --cached --quiet; then
   git -c user.name='Great Kingdom deployment' -c user.email='deployment@users.noreply.github.com' commit -m 'Prepare browser-only Great Kingdom practice'
 fi
