@@ -12,7 +12,7 @@ function modelAssetUrl(value,base,id){
  if(!match||match[1]!==id)throw Error('모델 파일의 저장소·고정 버전·identity가 올바르지 않습니다.');
  return url.href;
 }
-async function jsonFile(url,fetchImpl){const response=await fetchImpl(url,{credentials:'same-origin'});if(!response.ok)throw Error('기기 내 실행 설정 파일을 불러오지 못했어요. 페이지를 새로고침해 주세요.');return response.json();}
+async function jsonFile(url,fetchImpl){const response=await fetchImpl(url,{credentials:'same-origin',cache:'no-cache'});if(!response.ok)throw Error('기기 내 실행 설정 파일을 불러오지 못했어요. 페이지를 새로고침해 주세요.');return response.json();}
 export async function loadStaticConfig({base=DEFAULT_BASE,fetchImpl=fetch}={}){
  const config=await jsonFile(assetUrl('./config.json',base),fetchImpl);
  if(config.execution!=='browser'||!Array.isArray(config.models)||!config.models.length)throw Error('기기 내 실행 설정이 올바르지 않습니다.');

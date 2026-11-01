@@ -4,7 +4,7 @@ import {STORE,persistStudy,retryAnalysis} from './client.mjs';
 import {PracticeControls,missingNodes} from './controls.mjs';
 import {timelineSvg} from './timeline.mjs';
 import {LocalEngine} from './local-client.mjs';
-import {loadStaticConfig,loadStaticManifest} from './deployment.mjs';
+import {loadStaticConfig,loadStaticManifest} from './deployment.mjs?v=2';
 const staticOnly=document.documentElement?.dataset?.execution==='local';
 
 const $=id=>document.getElementById(id),controls=new PracticeControls(),shown=new Map();
