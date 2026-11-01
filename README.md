@@ -1,5 +1,7 @@
 # Great Kingdom practice · GitHub Pages
 
+Live practice app: https://philipontheroof.github.io/great-kingdom-practice/
+
 This repository hosts the prebuilt, static practice app from `dist/`. GitHub Actions only validates and uploads the committed files; it does not install the project, build the app, run Python, or contact the local training installation.
 
 The app and ONNX model run in each visitor's browser using WebGPU or WASM. Pages serves the HTML, JavaScript, runtime files, and public model file. Visitors need a network connection to open the site and obtain assets. Analysis runs on-device after those files load. The site does not provide a Python/HTTP inference server, private model delivery, or a promise of fully offline startup. User-created studies stay in that browser's local storage unless the user exports them.
@@ -25,4 +27,4 @@ GitHub's published Pages site limit is 1 GiB, and a Git repository file cannot e
 
 The workflow deliberately uploads only `dist/`, so repository notes and workflow files are not published as website content. The model and static runtime are public downloads and should contain no credentials or private training data.
 
-The workflow also verifies every model/runtime asset SHA against its manifest before deployment. `publish.sh` adds only the prepared deployment files, never a parent workspace. The current connected GitHub account is `philipontheroof`; creating the empty repository requires signing in or granting a repository-creation capability. This package does not claim that a GitHub repository or Pages URL is already live.
+The workflow also verifies every model/runtime asset SHA against its manifest before deployment. `publish.sh` adds only the prepared deployment files, never a parent workspace. Published on 2026-11-02 at the URL above. GitHub Pages uses the included Actions workflow. The bundled model is the pinned Champion learner-000000153476-af1a76d00083 snapshot, not an automatically updated training model. The deployed bundle and on-device WebGPU analysis were verified on a Mac browser; iPad/iPhone behavior remains to be checked.
