@@ -59,7 +59,15 @@ export function importDocument(value) {
 }
 
 export function studyForSave(doc) {
-  return {...doc,nodes:doc.nodes.map(({position,analysis,...node})=>node)};
+  return {
+    ...doc,
+    nodes: doc.nodes.map(({analysis, position, ...node}) => ({
+      ...node,
+      board: position?.board,
+      side_to_move: position?.side_to_move,
+      result: position?.result ?? null
+    }))
+  };
 }
 
 export const requestKey=(node,model,visits,seconds)=>JSON.stringify([node,model,visits,seconds]);

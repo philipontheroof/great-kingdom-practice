@@ -48,7 +48,7 @@ function library(){const v=JSON.parse(localStorage.getItem(STORE)||'[]');if(!Arr
 function saveNow(){if(!doc)return true;try{persistStudy(localStorage,doc);if($('save-state'))$('save-state').textContent='기기에 저장됨';return true;}catch{notice('자동 저장 실패 · 내보내기로 기보를 보관해 주세요.',true);if($('save-state'))$('save-state').textContent='저장 실패';return false;}}
 function save(){clearTimeout(saveTimer);if($('save-state'))$('save-state').textContent='저장 중';saveTimer=setTimeout(saveNow,200);}
 function cancel(){controls.invalidate();analysisController?.abort();analysisController=null;local?.cancel();analyzing=false;analysisKind=null;batching=false;moving=false;preview=null;}
-function positionRequest(node=active()){return {ruleset_version:doc.ruleset_version,setup:{board:node.position.board.slice(),side_to_move:node.position.side_to_move,komi:doc.setup.komi,result:node.position.result},actions:[]};}
+function positionRequest(node=active()){return {ruleset_version:doc.ruleset_version,setup:{board:node.position.board.slice(),side_to_move:node.position.side_to_move,previous_move_was_pass:Boolean(node.position.previous_move_was_pass),komi:doc.setup.komi,result:node.position.result},actions:[]};}
 async function position(payload){if(backend()==='local'){if(!local)throw Error('기기 내 엔진을 먼저 준비해 주세요.');return local.position(payload);}return api('position',payload);}
 function capture(){for(const n of doc.nodes){const a=nodeAnalysis(n);if(a)shown.set(n.id,a);}}
 
@@ -127,33 +127,39 @@ function setPlaceMode(mode){
 
 function makeNextPosition(parentPos,action,customSide=null){
  const curBoard=parentPos.board.slice();
- let nextSide=customSide??(parentPos.side_to_move==='first'?'second':'first');
- let result=null,wasPass=false;
+ let nextSide=customSide,result=null,wasPass=false;
 
  if(action===81){
   wasPass=true;
+  if(nextSide===null)nextSide=parentPos.side_to_move==='first'?'second':'first';
   if(parentPos.previous_move_was_pass){
    const t=territory(curBoard),first=t.filter(x=>x===1).length,second=t.filter(x=>x===2).length;
    result={winner:first-second>parentPos.komi?'first':'second',reason:'pass_score'};
   }
  }else if(action>=400){
-  const c=action-400;curBoard[c]=0;nextSide=customSide??parentPos.side_to_move;result=null;
+  const c=action-400;curBoard[c]=0;
+  if(nextSide===null)nextSide=parentPos.side_to_move;
+  result=null;
  }else if(action>=300){
-  const c=action-300;curBoard[c]=3;nextSide=customSide??parentPos.side_to_move;
+  const c=action-300;curBoard[c]=3;
+  if(nextSide===null)nextSide=parentPos.side_to_move;
   const gs=stateGroups({board:curBoard}),dead=gs.filter(g=>g.liberties.length===0);
   if(dead.length)result={winner:dead[0].color===1?'second':'first',reason:'siege'};
  }else if(action>=200){
-  const c=action-200;curBoard[c]=2;nextSide=customSide??(parentPos.side_to_move==='second'?'first':'second');
+  const c=action-200;curBoard[c]=2;
+  if(nextSide===null)nextSide='first';
   const gs=stateGroups({board:curBoard}),deadOpp=gs.filter(g=>g.color===1&&g.liberties.length===0),deadOwn=gs.filter(g=>g.color===2&&g.liberties.length===0);
   if(deadOpp.length)result={winner:'second',reason:'siege'};
   else if(deadOwn.length)result={winner:'first',reason:'siege'};
  }else if(action>=100){
-  const c=action-100;curBoard[c]=1;nextSide=customSide??(parentPos.side_to_move==='first'?'second':'first');
+  const c=action-100;curBoard[c]=1;
+  if(nextSide===null)nextSide='second';
   const gs=stateGroups({board:curBoard}),deadOpp=gs.filter(g=>g.color===2&&g.liberties.length===0),deadOwn=gs.filter(g=>g.color===1&&g.liberties.length===0);
   if(deadOpp.length)result={winner:'first',reason:'siege'};
   else if(deadOwn.length)result={winner:'second',reason:'siege'};
  }else{
   const mover=parentPos.side_to_move,me=mover==='first'?1:2;curBoard[action]=me;
+  if(nextSide===null)nextSide=mover==='first'?'second':'first';
   const gs=stateGroups({board:curBoard}),opp=3-me,deadOpp=gs.filter(g=>g.color===opp&&g.liberties.length===0),deadOwn=gs.filter(g=>g.color===me&&g.liberties.length===0);
   if(deadOpp.length)result={winner:mover,reason:'siege'};
   else if(deadOwn.length)result={winner:mover==='first'?'second':'first',reason:'siege'};
@@ -207,7 +213,7 @@ async function startAnalysis({ai=false,kind=ai?'ai':'once'}={}){
  try{result=await search(node,budget,{signal:controller.signal,onUpdate:r=>{if(valid()){acceptResult(r,node,model,execution);if(r.done||Date.now()-lastPaint>=180){lastPaint=Date.now();render();}}}});
  if(!valid())return;acceptResult(result,node,model,execution);notice('');
  }catch(error){if(error.name!=='AbortError'&&valid())notice(error.message,true);return;}
- finally{if(valid()){analyzing=false;analysisKind=null;analysisController=null;render();}}
+ finally{analyzing=false;analysisKind=null;analysisController=null;if(valid())render();}
  if(ai&&valid()&&controls.aiTurn(node.position)&&result?.recommended_action!==null&&result?.recommended_action!==undefined){await place(result.recommended_action,true);}
 }
 function schedule(){const n=active();if(!n)return;if(n.position.result){render();return;}
@@ -231,7 +237,7 @@ async function place(action,fromAI=false){
   }
   if(study!==doc||token!==controls.epoch)return;
   addNode(doc,node.id,action,next);onceNode=null;save();notice('');
- }finally{if(token===controls.epoch){moving=false;render();}}
+ }finally{moving=false;if(token===controls.epoch)render();}
  if(token===controls.epoch&&placeMode==='alternate')schedule();
 }
 
@@ -487,10 +493,20 @@ async function rebuildStudy(imported){
  for(const n of imported.nodes){
   let p;
   if(n.parent===null){
-   p=await position({ruleset_version:imported.ruleset_version,setup:imported.setup,actions:[]});
+   if(n.board&&n.side_to_move){
+    const s={board:n.board,side_to_move:n.side_to_move,previous_move_was_pass:false,komi:imported.setup.komi,result:n.result??null,ruleset_version:imported.ruleset_version};
+    p=await finalizePosition(positionPayload(s));
+   }else{
+    p=await position({ruleset_version:imported.ruleset_version,setup:imported.setup,actions:[]});
+   }
   }else{
    const parentNode=nodes.find(parent=>parent.id===n.parent);
-   p=await finalizePosition(makeNextPosition(parentNode.position,n.action));
+   if(n.board&&n.side_to_move){
+    const s={board:n.board,side_to_move:n.side_to_move,previous_move_was_pass:n.action===81,komi:imported.setup.komi,result:n.result??null,ruleset_version:imported.ruleset_version};
+    p=await finalizePosition(positionPayload(s));
+   }else{
+    p=await finalizePosition(makeNextPosition(parentNode.position,n.action));
+   }
   }
   nodes.push({...n,ply:n.parent===null?0:nodes.find(parent=>parent.id===n.parent).ply+1,position:p,analysis:null});
  }
