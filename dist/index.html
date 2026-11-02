@@ -1,6 +1,6 @@
 <!doctype html>
 <html data-execution="local" lang="ko">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#172e45"><title>Great Kingdom · 연습실</title><link rel="icon" href="data:,"><link rel="stylesheet" href="./style.css?v=4"><script type="module" src="./app.mjs?v=4"></script></head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#172e45"><title>Great Kingdom · 연습실</title><link rel="icon" href="data:,"><link rel="stylesheet" href="./style.css?v=11"><script type="module" src="./app.mjs?v=11"></script></head>
 <body>
   <main>
     <div class="study-toolbar"><div class="study-heading"><p class="eyebrow">PRACTICE WORKSPACE</p><input id="title" aria-label="기보 이름" maxlength="120" value="새로운 연습"><span id="save-state" class="saved">기기에 저장</span></div><div class="toolbar-actions"><button id="import-button" class="quiet-button">불러오기</button><button id="export-button" class="quiet-button">내보내기</button><button id="new-button" class="primary-button"><span>＋</span> 새 대국</button><input id="import-file" type="file" accept=".json,application/json" hidden></div></div>
@@ -8,27 +8,23 @@
     <section class="workspace" aria-label="대국과 분석">
       <section class="board-panel panel">
         <div class="board-top"><span id="connection" class="muted">실행부 연결 중</span><div class="game-condition"><span id="setup-label">중립 성 중앙</span><span>·</span><span id="komi-label">덤 2.5</span></div></div>
-        <div class="players"><div class="player"><span class="castle-mini red"></span><div><span id="red-player">나</span><small>빨간 성 · 선공</small></div><strong id="red-score">0<small>영토</small></strong></div><span class="versus">vs</span><div class="player blue-side"><strong id="blue-score">0<small>영토</small></strong><div><span id="blue-player">Champion</span><small>파란 성 · 후공</small></div><span class="castle-mini blue"></span></div></div>
+        <div class="players"><div class="player"><span class="castle-mini red"></span><div class="player-info"><span id="red-player">나</span><small>빨간 성 · 선공</small></div><strong id="red-score">0<small>영토</small></strong></div><span class="versus">vs</span><div class="player blue-side"><strong id="blue-score">0<small>영토</small></strong><div class="player-info"><span id="blue-player">Champion</span><small>파란 성 · 후공</small></div><span class="castle-mini blue"></span></div></div>
         <div class="placement-bar" role="toolbar" aria-label="착수 모드 및 성 배치">
-          <div class="placement-modes" role="radiogroup" aria-label="착수 모드">
-            <button type="button" id="mode-alternate" class="mode-btn active" aria-pressed="true" title="번갈아 가며 착수합니다">
-              <span class="mode-icon">⚔️</span> 번갈아 착수
-            </button>
-            <button type="button" id="mode-place-red" class="mode-btn mode-red" aria-pressed="false" title="판을 클릭하면 빨간 성을 1회 배치/제거합니다">
-              <span class="castle-mini red"></span> 빨간 성 배치
-            </button>
-            <button type="button" id="mode-place-blue" class="mode-btn mode-blue" aria-pressed="false" title="판을 클릭하면 파란 성을 1회 배치/제거합니다">
-              <span class="castle-mini blue"></span> 파란 성 배치
-            </button>
-            <button type="button" id="mode-place-neutral" class="mode-btn mode-neutral" aria-pressed="false" title="판을 클릭하면 중립 성을 1회 배치/제거합니다">
-              <span class="castle-mini neutral"></span> 중립 성 배치
-            </button>
+          <div class="placement-group">
+            <span class="bar-label">배치 모드:</span>
+            <div class="pill-group" role="radiogroup" aria-label="착수 모드">
+              <button type="button" id="mode-alternate" class="pill-btn active" aria-pressed="true" title="번갈아 가며 착수합니다">⚔️ 번갈아 착수</button>
+              <button type="button" id="mode-place-red" class="pill-btn pill-red" aria-pressed="false" title="판을 클릭하면 빨간 성을 1회 배치/제거합니다"><span class="dot-icon red"></span> 빨간 성</button>
+              <button type="button" id="mode-place-blue" class="pill-btn pill-blue" aria-pressed="false" title="판을 클릭하면 파란 성을 1회 배치/제거합니다"><span class="dot-icon blue"></span> 파란 성</button>
+              <button type="button" id="mode-place-neutral" class="pill-btn pill-neutral" aria-pressed="false" title="판을 클릭하면 중립 성을 1회 배치/제거합니다"><span class="dot-icon neutral"></span> 중립 성</button>
+            </div>
           </div>
-          <div class="turn-order-wrap">
-            <span class="turn-order-title">이번 턴 착수:</span>
-            <div class="turn-order-buttons" role="group" aria-label="이번 턴 착수 순서">
-              <button type="button" id="turn-order-red" class="turn-order-btn active side-red" title="이번 턴부터 빨간 성이 먼저 착수합니다">🔴 빨강 먼저</button>
-              <button type="button" id="turn-order-blue" class="turn-order-btn" title="이번 턴부터 파란 성이 먼저 착수합니다">🔵 파랑 먼저</button>
+          <div class="bar-divider"></div>
+          <div class="placement-group">
+            <span class="bar-label">다음 턴:</span>
+            <div class="pill-group" role="group" aria-label="이번 턴 착수 순서">
+              <button type="button" id="turn-order-red" class="pill-btn pill-red active" title="이번 턴부터 빨간 성이 먼저 착수합니다"><span class="dot-icon red"></span> 빨강 차례</button>
+              <button type="button" id="turn-order-blue" class="pill-btn pill-blue" title="이번 턴부터 파란 성이 먼저 착수합니다"><span class="dot-icon blue"></span> 파랑 차례</button>
             </div>
           </div>
         </div>

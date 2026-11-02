@@ -1,4 +1,5 @@
 import {newStudy,addNode,pathTo,lineThrough,importDocument,redEvaluation,studyForSave} from './study.mjs';
+import {facts} from './engine.mjs';
 import {boardSvg} from './board.mjs';
 import {STORE,persistStudy,retryAnalysis} from './client.mjs';
 import {PracticeControls,missingNodes,normalizeBudget,analysisFloor,budgetPayload,budgetReached,budgetLabel,BUDGET_RANGE,BUDGET_DEFAULT} from './controls.mjs';
@@ -117,34 +118,40 @@ function setPlaceMode(mode){
   cancel();controls.playing=false;
   notice(mode==='place-red'?'🔴 빨간 성 배치: 판을 클릭하면 빨간 성을 배치하거나 제거합니다. (1회 배치 후 자동 복귀)':mode==='place-blue'?'🔵 파란 성 배치: 판을 클릭하면 파란 성을 배치하거나 제거합니다. (1회 배치 후 자동 복귀)':'⚪ 중립 성 배치: 판을 클릭하면 중립 성을 배치하거나 제거합니다. (1회 배치 후 자동 복귀)');
  }else{
+  if(controls.anyAI())controls.playing=true;
   notice('');
  }
  render();
  if(mode==='alternate')schedule();
 }
 async function handlePlacementClick(action){
+ const node=active();
+ if(!node?.position)return;
  const stoneColor=placeMode==='place-red'?1:placeMode==='place-blue'?2:placeMode==='place-neutral'?3:0;
  if(!stoneColor)return;
- if(doc.nodes.length>1){
-  const ok=await ask('새 연습으로 시작할까요?','수순이 진행된 대국입니다. 현재 판에 성을 배치하여 새 연습을 시작할까요?','새 연습 시작');
-  if(!ok){setPlaceMode('alternate');return;}
-  const curBoard=active().position.board.slice();
-  curBoard[action]=curBoard[action]===stoneColor?0:stoneColor;
-  const nIdx=curBoard.indexOf(3);
-  await createGame({board:curBoard,side_to_move:active().position.side_to_move,neutral:nIdx>=0?[Math.floor(nIdx/9),nIdx%9]:null,komi:doc.setup.komi});
-  setPlaceMode('alternate');
-  return;
- }
- const curBoard=(doc.setup.board?doc.setup.board.slice():active().position.board.slice());
- curBoard[action]=curBoard[action]===stoneColor?0:stoneColor;
- const nIdx=curBoard.indexOf(3);
- doc.setup.neutral=nIdx>=0?[Math.floor(nIdx/9),nIdx%9]:null;
- doc.setup.board=curBoard;
  cancel();
- const nextPos=await position({setup:doc.setup,actions:[]});
- active().position=nextPos;
- active().analysis=null;
- shown.delete(active().id);
+ controls.playing=false;
+ const board=node.position.board.slice();
+ board[action]=board[action]===stoneColor?0:stoneColor;
+ node.position.board=board;
+ if(node.parent===null){
+  doc.setup.board=board.slice();
+  const nIdx=board.indexOf(3);
+  doc.setup.neutral=nIdx>=0?[Math.floor(nIdx/9),nIdx%9]:null;
+ }
+ try{
+  const next=await position(positionRequest(node));
+  node.position=next;
+ }catch{
+  const f=facts(node.position);
+  node.position.territory=f.territory;
+  node.position.legal_actions=f.legal_actions;
+  const rScore=f.territory.filter(x=>x===1).length,bScore=f.territory.filter(x=>x===2).length;
+  node.position.score={red:rScore,blue:bScore,red_margin:rScore-bScore-node.position.komi};
+  node.position.result=f.tactical.status==='terminal'?{winner:f.tactical.winner,reason:'siege'}:null;
+ }
+ node.analysis=null;
+ shown.delete(node.id);
  onceNode=null;
  setPlaceMode('alternate');
  save();
@@ -152,26 +159,27 @@ async function handlePlacementClick(action){
  schedule();
 }
 async function setTurnSide(side){
- const curSide=active()?.position?.side_to_move;
- if(curSide===side){
-  if(placeMode!=='alternate')setPlaceMode('alternate');
-  return;
- }
- if(doc.nodes.length>1){
-  const ok=await ask('새 연습으로 시작할까요?',`수순이 진행된 대국입니다. 현재 상태에서 ${sideName(side)} 선공으로 새 연습을 시작할까요?`,'새 연습 시작');
-  if(!ok)return;
-  const curBoard=active().position.board.slice();
-  const nIdx=curBoard.indexOf(3);
-  await createGame({board:curBoard,side_to_move:side,neutral:nIdx>=0?[Math.floor(nIdx/9),nIdx%9]:null,komi:doc.setup.komi});
-  setPlaceMode('alternate');
-  return;
- }
- doc.setup.side_to_move=side;
+ const node=active();
+ if(!node?.position)return;
  cancel();
- const nextPos=await position({setup:doc.setup,actions:[]});
- active().position=nextPos;
- active().analysis=null;
- shown.delete(active().id);
+ controls.playing=false;
+ node.position.side_to_move=side;
+ node.position.previous_move_was_pass=false;
+ if(node.parent===null){
+  doc.setup.side_to_move=side;
+ }
+ try{
+  const next=await position(positionRequest(node));
+  node.position=next;
+ }catch{
+  const f=facts(node.position);
+  node.position.legal_actions=f.legal_actions;
+  const rScore=f.territory.filter(x=>x===1).length,bScore=f.territory.filter(x=>x===2).length;
+  node.position.score={red:rScore,blue:bScore,red_margin:rScore-bScore-node.position.komi};
+  node.position.result=f.tactical.status==='terminal'?{winner:f.tactical.winner,reason:'siege'}:null;
+ }
+ node.analysis=null;
+ shown.delete(node.id);
  onceNode=null;
  setPlaceMode('alternate');
  save();
