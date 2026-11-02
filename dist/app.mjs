@@ -12,7 +12,7 @@ const $=id=>document.getElementById(id),controls=new PracticeControls(),shown=ne
 const SIDES=['first','second'];
 const settings={
  analysisLimit:{unit:'seconds',value:2.0},
- onceAutoShow:false,
+ onceAutoShow:true,
  layers:{ownership:true,policy:true,win:true,margin:true,pv:true},
  play:{first:{unit:'seconds',value:2.0},second:{unit:'seconds',value:2.0}},
  territory:true,numbers:true,
@@ -304,7 +304,7 @@ function renderAnalysis(){
  if($('analysis-source'))$('analysis-source').textContent=analysis?sourceLabel(analysis.source):visibleFor(active())?'분석 전':'숨김';
  if($('result-empty'))$('result-empty').hidden=Boolean(analysis);
  if($('result-body'))$('result-body').hidden=!analysis;
- if($('result-empty'))$('result-empty').textContent=!doc.model_id?'모델이 연결되지 않았어요. 양쪽 성을 직접 두며 국면을 살펴볼 수 있어요.':active().position.result&&visibleFor(active())?'대국이 종료되었어요. 이전 수로 돌아가 새 가지를 만들어 보세요.':visibleFor(active())?'이 국면은 아직 분석 전이에요. 1 · 분석에서 시작할 수 있어요.':'시각화가 꺼져 있어요. 1 · 시각화에서 이번 턴만 보거나 계속 볼 수 있어요.';
+ if($('result-empty'))$('result-empty').textContent=!doc.model_id?'모델이 연결되지 않았어요. 양쪽 성을 직접 두며 국면을 살펴볼 수 있어요.':active().position.result&&visibleFor(active())?'대국이 종료되었어요. 이전 수로 돌아가 새 가지를 만들어 보세요.':visibleFor(active())?'이 국면은 아직 분석 전이에요. 1 · 분석에서 시작할 수 있어요.':'시각화가 꺼져 있어요. 1 · 시각화에서 현재 국면만 보거나 계속 볼 수 있어요.';
  if($('win-column'))$('win-column').hidden=!(L.win&&analysis);
  if($('win-value'))$('win-value').textContent=pct(values.win);
  if($('red-percent'))$('red-percent').textContent=pct(values.win);
@@ -356,15 +356,15 @@ function renderAnalysis(){
 function setSwitch(id,on,{soft=false}={}){const el=$(id);if(!el)return;el.checked=Boolean(on);el.setAttribute('aria-checked',String(Boolean(on)));el.classList.toggle('soft-disabled',soft);el.closest?.('label')?.classList.toggle('soft-disabled',soft);}
 function renderSettings(){
  const node=active(),a=nodeAnalysis(node),side=node?.position?.side_to_move;
- const stateText=batching?'일괄 분석 중':analyzing?(analysisKind==='ai'?`AI ${sideName(side)} 착수 탐색 중`:analysisKind==='continuous'?`${sideName(side)} 턴 계속 분석 중`:'이번 턴 분석 중'):a?'분석 완료':'분석 전';
+ const stateText=batching?'일괄 분석 중':analyzing?(analysisKind==='ai'?`AI ${sideName(side)} 착수 탐색 중`:analysisKind==='continuous'?`${sideName(side)} 턴 계속 분석 중`:'현재 국면 분석 중'):a?'분석 완료':'분석 전';
  
  // 2.1 현재 분석 visit 수
  const visitsNum=(a?.mcts?.root_visits||0);
  if($('search-visits-num'))$('search-visits-num').textContent=`${visitsNum.toLocaleString()} visits`;
  if($('search-status'))$('search-status').textContent=`${stateText} · ${visitsNum.toLocaleString()} visits · ${(a?.cumulative_elapsed_seconds??a?.mcts?.elapsed_seconds??0).toFixed(1)}초`;
  
- // 2.2 이번 턴만 분석 시작 버튼 & 토글
- if($('analyze-button')){$('analyze-button').textContent=analyzing?'분석 중지':'이번 턴만 분석 시작';$('analyze-button').disabled=moving||batching||!modelAvailable()||Boolean(node?.position?.result&&!analyzing);}
+ // 2.2 현재 국면 분석 버튼 & 토글
+ if($('analyze-button')){$('analyze-button').textContent=analyzing?'분석 중지':'현재 국면 분석';$('analyze-button').classList.toggle('active',analyzing);$('analyze-button').disabled=moving||batching||!modelAvailable()||Boolean(node?.position?.result&&!analyzing);}
  setSwitch('once-auto-show',settings.onceAutoShow);
  
  // 2.3 이번 턴부터 계속 분석 토글 (빨강 / 파랑)
@@ -540,7 +540,12 @@ $('mode-place-neutral')?.addEventListener('click',()=>setPlaceMode(placeMode==='
 $('mode-remove')?.addEventListener('click',()=>setPlaceMode(placeMode==='remove'?'alternate':'remove'));
 $('turn-order-red')?.addEventListener('click',()=>run(()=>setTurnSide('first')));
 $('turn-order-blue')?.addEventListener('click',()=>run(()=>setTurnSide('second')));
-$('analyze-button')?.addEventListener('click',()=>{if(analyzing){if(analysisKind==='ai')controls.playing=false;cancel();render();return;}if(settings.onceAutoShow)onceNode=active().id;run(()=>startAnalysis());});
+$('analyze-button')?.addEventListener('click',()=>{
+ if(analyzing){if(analysisKind==='ai')controls.playing=false;cancel();render();return;}
+ const n=active();if(!n)return;
+ onceNode=n.id;controls.visible=true;render();
+ run(()=>startAnalysis({kind:'once'}));
+});
 $('once-auto-show')?.addEventListener('change',e=>{settings.onceAutoShow=e.target.checked;saveSettings();render();});
 for(const s of SIDES)$(`continuous-${s}`)?.addEventListener('change',e=>{
  controls.continuous[s]=e.target.checked;if(!controls.anyContinuous())controls.visualContinuous=false;saveSettings();
@@ -581,7 +586,7 @@ $('visual-once')?.addEventListener('click',()=>run(async()=>{
  const n=active();if(onceNode===n.id){onceNode=null;render();return;}
  if(nodeAnalysis(n)||analyzing){onceNode=n.id;render();return;}
  if(!modelAvailable())throw Error('모델이 준비되면 분석할 수 있어요.');
- if(!await ask('아직 분석하지 않은 국면이에요','이번 턴만 분석을 시작하고 결과를 실시간으로 볼까요?','분석하고 보기')||active()!==n)return;
+ if(!await ask('아직 분석하지 않은 국면이에요','현재 국면 분석을 시작하고 결과를 실시간으로 볼까요?','분석하고 보기')||active()!==n)return;
  onceNode=n.id;await startAnalysis();
 }));
 $('visual-continuous')?.addEventListener('click',e=>{
