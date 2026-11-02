@@ -2,10 +2,39 @@ export const RULESET='gk-v2.2';
 const SIZE=9, AREA=81, PASS=81;
 const neighbors=i=>{const r=Math.floor(i/9),c=i%9,o=[];if(r)o.push(i-9);if(c<8)o.push(i+1);if(r<8)o.push(i+9);if(c)o.push(i-1);return o;};
 function validateKomi(k){if(typeof k!=='number'||!Number.isFinite(k))throw Error('komi must be finite');return Object.is(k,-0)?0:k;}
-export function initialState(setup={}){if(!setup||typeof setup!=='object'||Array.isArray(setup))throw Error('invalid setup');const board=Array(AREA).fill(0);if(Array.isArray(setup.board)&&setup.board.length===AREA){for(let i=0;i<AREA;i++){const v=setup.board[i];board[i]=[1,2,3].includes(v)?v:0;}}else{const neutral=Object.hasOwn(setup,'neutral')?setup.neutral:[4,4];if(neutral!==null){if(!Array.isArray(neutral)||neutral.length!==2||neutral.some(x=>!Number.isInteger(x)||x<0||x>8))throw Error('invalid neutral');board[neutral[0]*9+neutral[1]]=3;}if(Array.isArray(setup.stones)){for(const s of setup.stones){if(s&&Number.isInteger(s.action)&&s.action>=0&&s.action<AREA&&[1,2,3].includes(s.color)){board[s.action]=s.color;}}}}const side=setup.side_to_move==='second'?'second':'first';return {board,side_to_move:side,previous_move_was_pass:false,komi:validateKomi(setup.komi??2.5),result:null,ruleset_version:RULESET};}
 function group(board,start){const color=board[start];if(color!==1&&color!==2)throw Error('group must start on castle');const stones=new Set([start]),q=[start];for(let n=0;n<q.length;n++)for(const j of neighbors(q[n]))if(board[j]===color&&!stones.has(j)){stones.add(j);q.push(j);}const libs=new Set();for(const i of stones)for(const j of neighbors(i))if(board[j]===0)libs.add(j);return {color,stones:[...stones].sort((a,b)=>a-b),liberties:[...libs].sort((a,b)=>a-b)};}
-function territory(board){const out=Array(AREA).fill(0),seen=new Set();for(let i=0;i<AREA;i++){if(board[i]!==0||seen.has(i))continue;const q=[i],component=[i];seen.add(i);const adj=new Set(),edges=new Set();for(let n=0;n<q.length;n++){const x=q[n],r=Math.floor(x/9),c=x%9;if(r===0)edges.add('t');if(r===8)edges.add('b');if(c===0)edges.add('l');if(c===8)edges.add('r');for(const j of neighbors(x)){if(board[j]===0&&!seen.has(j)){seen.add(j);q.push(j);component.push(j);}else if(board[j]===1||board[j]===2)adj.add(board[j]);}}if(edges.size===4)continue;if(!adj.has(2))for(const x of component)out[x]=1;else if(!adj.has(1))for(const x of component)out[x]=2;}return out;}
-function stateGroups(s){const seen=new Set(),gs=[];for(let i=0;i<AREA;i++)if((s.board[i]===1||s.board[i]===2)&&!seen.has(i)){const g=group(s.board,i);for(const x of g.stones)seen.add(x);gs.push(g);}return gs;}
+export function stateGroups(s){const seen=new Set(),gs=[];for(let i=0;i<AREA;i++)if((s.board[i]===1||s.board[i]===2)&&!seen.has(i)){const g=group(s.board,i);for(const x of g.stones)seen.add(x);gs.push(g);}return gs;}
+export function initialState(setup={}){
+  if(!setup||typeof setup!=='object'||Array.isArray(setup))throw Error('invalid setup');
+  const board=Array(AREA).fill(0);
+  if(Array.isArray(setup.board)&&setup.board.length===AREA){
+    for(let i=0;i<AREA;i++){const v=setup.board[i];board[i]=[1,2,3].includes(v)?v:0;}
+  }else{
+    const neutral=Object.hasOwn(setup,'neutral')?setup.neutral:[4,4];
+    if(neutral!==null){
+      if(!Array.isArray(neutral)||neutral.length!==2||neutral.some(x=>!Number.isInteger(x)||x<0||x>8))throw Error('invalid neutral');
+      board[neutral[0]*9+neutral[1]]=3;
+    }
+    if(Array.isArray(setup.stones)){
+      for(const s of setup.stones){
+        if(s&&Number.isInteger(s.action)&&s.action>=0&&s.action<AREA&&[1,2,3].includes(s.color)){
+          board[s.action]=s.color;
+        }
+      }
+    }
+  }
+  const side=setup.side_to_move==='second'?'second':'first';
+  let result=setup.result?{winner:setup.result.winner,reason:setup.result.reason}:null;
+  if(!result&&Array.isArray(setup.board)){
+    const gs=stateGroups({board});
+    const dead=gs.filter(g=>g.liberties.length===0);
+    if(dead.length){
+      result={winner:dead[0].color===1?'second':'first',reason:'siege'};
+    }
+  }
+  return {board,side_to_move:side,previous_move_was_pass:false,komi:validateKomi(setup.komi??2.5),result,ruleset_version:RULESET};
+}
+export function territory(board){const out=Array(AREA).fill(0),seen=new Set();for(let i=0;i<AREA;i++){if(board[i]!==0||seen.has(i))continue;const q=[i],component=[i];seen.add(i);const adj=new Set(),edges=new Set();for(let n=0;n<q.length;n++){const x=q[n],r=Math.floor(x/9),c=x%9;if(r===0)edges.add('t');if(r===8)edges.add('b');if(c===0)edges.add('l');if(c===8)edges.add('r');for(const j of neighbors(x)){if(board[j]===0&&!seen.has(j)){seen.add(j);q.push(j);component.push(j);}else if(board[j]===1||board[j]===2)adj.add(board[j]);}}if(edges.size===4)continue;if(!adj.has(2))for(const x of component)out[x]=1;else if(!adj.has(1))for(const x of component)out[x]=2;}return out;}
 function legal(s,terr=territory(s.board)){if(s.result)return [];const own=s.side_to_move==='first'?1:2,opp=3-own,out=[];for(let i=0;i<AREA;i++)if(!s.board[i]&&terr[i]!==opp&&!(terr[i]===own&&s.ruleset_version===RULESET))out.push(i);out.push(PASS);return out;}
 function playUnchecked(s,a){if(a===PASS){if(s.previous_move_was_pass){const t=territory(s.board),first=t.filter(x=>x===1).length,second=t.filter(x=>x===2).length;return {...s,result:{winner:first-second>s.komi?'first':'second',reason:'pass_score'}};}return {...s,side_to_move:s.side_to_move==='first'?'second':'first',previous_move_was_pass:true};}const board=s.board.slice(),mover=s.side_to_move,me=mover==='first'?1:2,opp=3-me;board[a]=me;const provisional={...s,board,previous_move_was_pass:false};const checked=new Set();for(const j of neighbors(a))if(board[j]===opp&&!checked.has(j)){const g=group(board,j);g.stones.forEach(x=>checked.add(x));if(!g.liberties.length)return {...provisional,result:{winner:mover,reason:'siege'}};}const own=group(board,a);if(!own.liberties.length)return {...provisional,result:{winner:mover==='first'?'second':'first',reason:'siege'}};return {...provisional,side_to_move:mover==='first'?'second':'first'};}
 export function playAction(s,a){if(!Number.isInteger(a)||a<0||a>PASS)throw Error('action must be integer 0..81');if(!legal(s).includes(a))throw Error('illegal move');return playUnchecked(s,a);}

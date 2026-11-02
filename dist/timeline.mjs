@@ -14,6 +14,24 @@ export function timelineSvg(doc,analysisFor,mode='win'){
  svg+=`<line x1="${x(doc.nodes.find(n=>n.id===doc.selected).ply)}" x2="${x(doc.nodes.find(n=>n.id===doc.selected).ply)}" y1="15" y2="175" stroke="#365969" stroke-opacity=".25"/>`;
  if(!points.some(p=>value(p)!==null))svg+='<text x="340" y="60" text-anchor="middle" class="axis-label">미분석 구간 · 아래 한번에 다시 분석에서 계산할 수 있어요</text>';
  for(const e of l.edges){const a=e.from,b=e.to;svg+=`<path d="M${a.x+23} ${a.y+211} C${a.x+36} ${a.y+211},${b.x-36} ${b.y+211},${b.x-23} ${b.y+211}" fill="none" stroke="${selected.has(b.id)?'#73918d':'#d8dfe6'}" stroke-width="${selected.has(b.id)?2:1.5}"/>`;}
- for(const n of l.nodes){const parent=doc.nodes.find(p=>p.id===n.parent),red=parent?.position?parent.position.side_to_move==='first':n.ply%2===1,color=n.parent===null?'#e4e9ed':red?'#ee6338':'#4173e6',label=n.action===null?'시작':n.action===81?'패스':`${Math.floor(n.action/9)+1}·${n.action%9+1}`;svg+=`<g data-node="${n.id}" tabindex="0" role="button" aria-label="${n.ply}수 ${label}"><rect x="${n.x-23}" y="${n.y+195}" width="46" height="32" rx="7" fill="${color}" stroke="${n.id===doc.selected?'#172e45':'none'}" stroke-width="3"/><text x="${n.x}" y="${n.y+215}" text-anchor="middle" fill="${n.parent===null?'#526474':'white'}" font-size="12" font-weight="650">${label}</text></g>`;}
+ for(const n of l.nodes){
+  const parent=doc.nodes.find(p=>p.id===n.parent);
+  const red=parent?.position?parent.position.side_to_move==='first':n.ply%2===1;
+  const a=n.action;
+  const coord = c => `${Math.floor(c/9)+1}·${c%9+1}`;
+  let label, color;
+  if(n.parent===null){ label='시작'; color='#e4e9ed'; }
+  else if(a===81){ label='패스'; color=red?'#ee6338':'#4173e6'; }
+  else if(a>=400){ label='제거 '+coord(a-400); color='#64748b'; }
+  else if(a>=300){ label='중립 '+coord(a-300); color='#94a3b8'; }
+  else if(a>=200){ label='파랑 '+coord(a-200); color='#4173e6'; }
+  else if(a>=100){ label='빨강 '+coord(a-100); color='#ee6338'; }
+  else { label=coord(a); color=red?'#ee6338':'#4173e6'; }
+
+  const rw = Math.max(46, label.length * 8.5 + 10);
+  const rx = n.x - rw / 2;
+  const hasNote = Boolean(n.notes && n.notes.trim().length > 0);
+  svg+=`<g data-node="${n.id}" tabindex="0" role="button" aria-label="${n.ply}수 ${label}"><rect x="${rx}" y="${n.y+195}" width="${rw}" height="32" rx="7" fill="${color}" stroke="${n.id===doc.selected?'#172e45':'none'}" stroke-width="3"/><text x="${n.x}" y="${n.y+215}" text-anchor="middle" fill="${n.parent===null?'#526474':'white'}" font-size="${label.length > 4 ? 11 : 12}" font-weight="650">${label}</text>${hasNote ? `<circle cx="${rx+rw-4}" cy="${n.y+197}" r="4.5" fill="#f59e0b" stroke="#ffffff" stroke-width="1.5"/>` : ''}</g>`;
+ }
  return svg+'</svg>';
 }

@@ -1,5 +1,5 @@
 import {newStudy,addNode,pathTo,lineThrough,importDocument,redEvaluation,studyForSave} from './study.mjs';
-import {facts} from './engine.mjs';
+import {facts,stateGroups,territory,canonicalState,positionPayload} from './engine.mjs';
 import {boardSvg} from './board.mjs';
 import {STORE,persistStudy,retryAnalysis} from './client.mjs';
 import {PracticeControls,missingNodes,normalizeBudget,analysisFloor,budgetPayload,budgetReached,budgetLabel,BUDGET_RANGE,BUDGET_DEFAULT} from './controls.mjs';
@@ -48,7 +48,7 @@ function library(){const v=JSON.parse(localStorage.getItem(STORE)||'[]');if(!Arr
 function saveNow(){if(!doc)return true;try{persistStudy(localStorage,doc);if($('save-state'))$('save-state').textContent='기기에 저장됨';return true;}catch{notice('자동 저장 실패 · 내보내기로 기보를 보관해 주세요.',true);if($('save-state'))$('save-state').textContent='저장 실패';return false;}}
 function save(){clearTimeout(saveTimer);if($('save-state'))$('save-state').textContent='저장 중';saveTimer=setTimeout(saveNow,200);}
 function cancel(){controls.invalidate();analysisController?.abort();analysisController=null;local?.cancel();analyzing=false;analysisKind=null;batching=false;moving=false;preview=null;}
-function positionRequest(node=active()){return {ruleset_version:doc.ruleset_version,setup:doc.setup,actions:pathTo(doc,node.id)};}
+function positionRequest(node=active()){return {ruleset_version:doc.ruleset_version,setup:{board:node.position.board.slice(),side_to_move:node.position.side_to_move,komi:doc.setup.komi,result:node.position.result},actions:[]};}
 async function position(payload){if(backend()==='local'){if(!local)throw Error('기기 내 엔진을 먼저 준비해 주세요.');return local.position(payload);}return api('position',payload);}
 function capture(){for(const n of doc.nodes){const a=nodeAnalysis(n);if(a)shown.set(n.id,a);}}
 
@@ -116,7 +116,7 @@ function setPlaceMode(mode){
  placeMode=mode;
  if(mode!=='alternate'){
   cancel();controls.playing=false;
-  notice(mode==='place-red'?'🔴 빨간 성 배치 모드: 판을 클릭하면 빨간 성을 배치/제거합니다. 완료 후 [번갈아 착수]를 누르세요.':mode==='place-blue'?'🔵 파란 성 배치 모드: 판을 클릭하면 파란 성을 배치/제거합니다. 완료 후 [번갈아 착수]를 누르세요.':'⚪ 중립 성 배치 모드: 판을 클릭하면 중립 성을 배치/제거합니다. 완료 후 [번갈아 착수]를 누르세요.');
+  notice(mode==='place-red'?'🔴 빨간 성 배치: 판을 클릭하면 빨간 성이 놓여집니다.':mode==='place-blue'?'🔵 파란 성 배치: 판을 클릭하면 파란 성이 놓여집니다.':mode==='place-neutral'?'⚪ 중립 성 배치: 판을 클릭하면 중립 성이 놓여집니다.':'🗑️ 성 제거: 판의 성을 클릭하면 제거됩니다.');
  }else{
   if(controls.anyAI())controls.playing=true;
   notice('');
@@ -124,62 +124,81 @@ function setPlaceMode(mode){
  render();
  if(mode==='alternate')schedule();
 }
-async function handlePlacementClick(action){
- const node=active();
- if(!node?.position)return;
- const stoneColor=placeMode==='place-red'?1:placeMode==='place-blue'?2:placeMode==='place-neutral'?3:0;
- if(!stoneColor)return;
- cancel();
- controls.playing=false;
- const curBoard=node.position.board.slice();
- curBoard[action]=curBoard[action]===stoneColor?0:stoneColor;
- const nIdx=curBoard.indexOf(3);
- const neutral=nIdx>=0?[Math.floor(nIdx/9),nIdx%9]:null;
- const side=node.position.side_to_move||'first';
 
- if(doc.nodes.length>1){
-  await createGame({board:curBoard,side_to_move:side,neutral,komi:doc.setup.komi},{keepPlaceMode:true});
-  return;
+function makeNextPosition(parentPos,action,customSide=null){
+ const curBoard=parentPos.board.slice();
+ let nextSide=customSide??(parentPos.side_to_move==='first'?'second':'first');
+ let result=null,wasPass=false;
+
+ if(action===81){
+  wasPass=true;
+  if(parentPos.previous_move_was_pass){
+   const t=territory(curBoard),first=t.filter(x=>x===1).length,second=t.filter(x=>x===2).length;
+   result={winner:first-second>parentPos.komi?'first':'second',reason:'pass_score'};
+  }
+ }else if(action>=400){
+  const c=action-400;curBoard[c]=0;nextSide=customSide??parentPos.side_to_move;result=null;
+ }else if(action>=300){
+  const c=action-300;curBoard[c]=3;nextSide=customSide??parentPos.side_to_move;
+  const gs=stateGroups({board:curBoard}),dead=gs.filter(g=>g.liberties.length===0);
+  if(dead.length)result={winner:dead[0].color===1?'second':'first',reason:'siege'};
+ }else if(action>=200){
+  const c=action-200;curBoard[c]=2;nextSide=customSide??(parentPos.side_to_move==='second'?'first':'second');
+  const gs=stateGroups({board:curBoard}),deadOpp=gs.filter(g=>g.color===1&&g.liberties.length===0),deadOwn=gs.filter(g=>g.color===2&&g.liberties.length===0);
+  if(deadOpp.length)result={winner:'second',reason:'siege'};
+  else if(deadOwn.length)result={winner:'first',reason:'siege'};
+ }else if(action>=100){
+  const c=action-100;curBoard[c]=1;nextSide=customSide??(parentPos.side_to_move==='first'?'second':'first');
+  const gs=stateGroups({board:curBoard}),deadOpp=gs.filter(g=>g.color===2&&g.liberties.length===0),deadOwn=gs.filter(g=>g.color===1&&g.liberties.length===0);
+  if(deadOpp.length)result={winner:'first',reason:'siege'};
+  else if(deadOwn.length)result={winner:'second',reason:'siege'};
+ }else{
+  const mover=parentPos.side_to_move,me=mover==='first'?1:2;curBoard[action]=me;
+  const gs=stateGroups({board:curBoard}),opp=3-me,deadOpp=gs.filter(g=>g.color===opp&&g.liberties.length===0),deadOwn=gs.filter(g=>g.color===me&&g.liberties.length===0);
+  if(deadOpp.length)result={winner:mover,reason:'siege'};
+  else if(deadOwn.length)result={winner:mover==='first'?'second':'first',reason:'siege'};
  }
 
- doc.setup.board=curBoard;
- doc.setup.neutral=neutral;
- doc.setup.side_to_move=side;
- node.position=await position({ruleset_version:doc.ruleset_version,setup:doc.setup,actions:[]});
- node.analysis=null;
- shown.delete(node.id);
- onceNode=null;
- save();
- render();
+ const s={board:curBoard,side_to_move:nextSide,previous_move_was_pass:wasPass,komi:parentPos.komi,result,ruleset_version:parentPos.ruleset_version};
+ return positionPayload(s);
 }
-async function setTurnSide(side){
- const node=active();
- if(!node?.position)return;
- const curSide=node.position.side_to_move;
- if(curSide===side)return;
- cancel();
- controls.playing=false;
- const curBoard=node.position.board.slice();
- const nIdx=curBoard.indexOf(3);
- const neutral=nIdx>=0?[Math.floor(nIdx/9),nIdx%9]:null;
 
- if(doc.nodes.length>1){
-  await createGame({board:curBoard,side_to_move:side,neutral,komi:doc.setup.komi},{keepPlaceMode:true});
-  if(placeMode==='alternate'&&controls.anyAI())controls.playing=true;
-  if(placeMode==='alternate')schedule();
-  return;
+async function finalizePosition(payload){
+ const canonical=canonicalState({board:payload.board,side_to_move:payload.side_to_move,previous_move_was_pass:payload.previous_move_was_pass,komi:payload.komi,result:payload.result,ruleset_version:payload.ruleset_version});
+ let state_id;
+ if(globalThis.crypto?.subtle){
+  const digest=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(canonical));
+  state_id=[...new Uint8Array(digest)].map(x=>x.toString(16).padStart(2,'0')).join('');
+ }else{
+  const {createHash}=await import('node:crypto');
+  state_id=createHash('sha256').update(canonical).digest('hex');
  }
+ return {...payload,state_id};
+}
 
- doc.setup.side_to_move=side;
- node.position=await position({ruleset_version:doc.ruleset_version,setup:doc.setup,actions:[]});
- node.analysis=null;
- shown.delete(node.id);
- onceNode=null;
+async function handleBoardClick(cell){
+ const node=active();if(!node?.position)return;
+ if(placeMode==='alternate'){await place(cell);return;}
+ if(placeMode==='place-red'){await place(100+cell);return;}
+ if(placeMode==='place-blue'){await place(200+cell);return;}
+ if(placeMode==='place-neutral'){await place(300+cell);return;}
+ if(placeMode==='remove'){
+  if(node.position.board[cell]===0){notice('제거할 성이 없습니다.',true);return;}
+  await place(400+cell);return;
+ }
+}
+
+async function setTurnSide(side){
+ const node=active();if(!node?.position)return;
+ if(node.position.side_to_move===side)return;
+ cancel();controls.playing=false;
+ node.position=await finalizePosition({...node.position,side_to_move:side,legal_actions:facts({board:node.position.board,side_to_move:side,komi:doc.setup.komi,result:node.position.result,ruleset_version:doc.ruleset_version}).legal_actions});
+ node.analysis=null;shown.delete(node.id);onceNode=null;
  if(placeMode==='alternate'&&controls.anyAI())controls.playing=true;
- save();
- render();
+ save();render();
  if(placeMode==='alternate')schedule();
 }
+
 async function startAnalysis({ai=false,kind=ai?'ai':'once'}={}){
  if(!active()||moving||batching||!modelAvailable()||(ai&&!canAiPlay()))return;
  cancel();const node=active(),study=doc,model=doc.model_id,execution=backend(),token=controls.begin(node.id,model,execution),controller=new AbortController();analysisController=controller;analyzing=true;analysisKind=kind;
@@ -198,14 +217,22 @@ function schedule(){const n=active();if(!n)return;if(n.position.result){render()
 async function selectNode(id){cancel();controls.playing=false;placeMode='alternate';if(onceNode!==id)onceNode=null;doc.selected=id;save();render();schedule();}
 async function place(action,fromAI=false){
  const node=active();if(moving||preview||node.position.result)return;
- if(!fromAI&&controls.aiTurn(node.position))return notice('AI 차례입니다. AI 착수 토글을 끄면 직접 둘 수 있어요.');
- if(!node.position.legal_actions.includes(action))return notice('그 칸에는 둘 수 없어요.',true);
+ if(!fromAI&&controls.aiTurn(node.position)&&placeMode==='alternate')return notice('AI 차례입니다. AI 착수 토글을 끄면 직접 둘 수 있어요.');
+ if(action<81&&!node.position.legal_actions.includes(action))return notice('그 칸에는 둘 수 없어요.',true);
  cancel();const token=controls.epoch,study=doc;moving=true;
- if(!fromAI&&controls.anyAI())controls.playing=true;
+ if(!fromAI&&controls.anyAI()&&placeMode==='alternate')controls.playing=true;
  render();
- try{const next=await position({...positionRequest(node),actions:[...pathTo(doc,node.id),action]});if(study!==doc||token!==controls.epoch)return;addNode(doc,node.id,action,next);onceNode=null;save();notice('');}
- finally{if(token===controls.epoch){moving=false;render();}}
- if(token===controls.epoch)schedule();
+ try{
+  let next;
+  if(backend()==='host'&&!staticOnly&&action<=81){
+   next=await position({...positionRequest(node),actions:[...pathTo(doc,node.id),action]});
+  }else{
+   next=await finalizePosition(makeNextPosition(node.position,action));
+  }
+  if(study!==doc||token!==controls.epoch)return;
+  addNode(doc,node.id,action,next);onceNode=null;save();notice('');
+ }finally{if(token===controls.epoch){moving=false;render();}}
+ if(token===controls.epoch&&placeMode==='alternate')schedule();
 }
 
 // ---- Rendering ------------------------------------------------------------
@@ -219,6 +246,8 @@ function renderPlacementBar(){
  $('mode-place-blue')?.setAttribute?.('aria-pressed',String(placeMode==='place-blue'));
  $('mode-place-neutral')?.classList?.toggle?.('active',placeMode==='place-neutral');
  $('mode-place-neutral')?.setAttribute?.('aria-pressed',String(placeMode==='place-neutral'));
+ $('mode-remove')?.classList?.toggle?.('active',placeMode==='remove');
+ $('mode-remove')?.setAttribute?.('aria-pressed',String(placeMode==='remove'));
 
  const rBtn=$('turn-order-red'),bBtn=$('turn-order-blue');
  if(rBtn){
@@ -239,12 +268,14 @@ function renderBoard(){
   boardEl.classList?.toggle?.('placing-red',placeMode==='place-red');
   boardEl.classList?.toggle?.('placing-blue',placeMode==='place-blue');
   boardEl.classList?.toggle?.('placing-neutral',placeMode==='place-neutral');
+  boardEl.classList?.toggle?.('placing-remove',placeMode==='remove');
   boardEl.innerHTML=boardSvg(p,{actions:[...pathTo(doc,node.id),...(preview?.actions||[])],lastAction:preview?.actions.at(-1)??node.action,analysis:preview?null:visible,showTerritory:settings.territory,showOwnership:settings.layers.ownership,showCandidates:settings.layers.policy&&Boolean(visible)&&!preview,showNumbers:settings.numbers});
   const svg=boardEl.querySelector?.('svg');
   if(svg){
    svg.classList?.toggle?.('placing-red',placeMode==='place-red');
    svg.classList?.toggle?.('placing-blue',placeMode==='place-blue');
    svg.classList?.toggle?.('placing-neutral',placeMode==='place-neutral');
+   svg.classList?.toggle?.('placing-remove',placeMode==='remove');
   }
   boardEl.setAttribute('aria-busy',String(moving));
  }
@@ -450,7 +481,21 @@ async function setupBackend(){
  backendReady=true;if($('connection'))$('connection').textContent=requested==='local'?'기기 내 엔진 준비됨':`Mac ${config?.device?.toUpperCase?.()||'CPU'} 연결됨`;notice('');render();schedule();
  }catch(e){if(requested===backend()&&model===doc.model_id){backendReady=false;if($('connection'))$('connection').textContent='실행부 준비 실패';notice(e.message,true);render();}}
 }
-async function rebuildStudy(imported){if(backend()==='host')return api('validate-study',studyForSave(imported));const nodes=[];for(const n of imported.nodes){const p=await position({ruleset_version:imported.ruleset_version,setup:imported.setup,actions:pathTo(imported,n.id)});nodes.push({...n,ply:n.parent===null?0:nodes.find(p=>p.id===n.parent).ply+1,position:p,analysis:null});}return {...imported,nodes};}
+async function rebuildStudy(imported){
+ if(backend()==='host')return api('validate-study',studyForSave(imported));
+ const nodes=[];
+ for(const n of imported.nodes){
+  let p;
+  if(n.parent===null){
+   p=await position({ruleset_version:imported.ruleset_version,setup:imported.setup,actions:[]});
+  }else{
+   const parentNode=nodes.find(parent=>parent.id===n.parent);
+   p=await finalizePosition(makeNextPosition(parentNode.position,n.action));
+  }
+  nodes.push({...n,ply:n.parent===null?0:nodes.find(parent=>parent.id===n.parent).ply+1,position:p,analysis:null});
+ }
+ return {...imported,nodes};
+}
 async function loadStudy(value,{initializeModel=true,preserveCurrent=true}={}){const imported=importDocument(value);clearTimeout(saveTimer);if(preserveCurrent&&!saveNow())throw Error('현재 기보를 내보내기로 보관해 주세요.');cancel();controls.playing=false;const epoch=controls.epoch,rebuilt=await rebuildStudy(imported);if(epoch!==controls.epoch)return;doc={...rebuilt,storage_id:value.storage_id||crypto.randomUUID()};placeMode='alternate';onceNode=null;shown.clear();populateModels();render();save();if(initializeModel&&backend()==='local'&&localModel!==doc.model_id)await setupBackend();else if(initializeModel)schedule();}
 async function createGame(setup,{keepPlaceMode=false}={}){cancel();controls.playing=false;const epoch=controls.epoch,p=await position({ruleset_version:doc?.ruleset_version||'gk-v2.2',setup,actions:[]});if(epoch!==controls.epoch)return;clearTimeout(saveTimer);if(!saveNow())throw Error('현재 기보를 먼저 보관해 주세요.');const model=doc?.model_id||config?.models?.[0]?.id||null;doc={...newStudy(setup,p),storage_id:crypto.randomUUID(),model_id:model};doc.title=`${new Date().toLocaleDateString('ko-KR',{month:'long',day:'numeric'})}의 연습`;if(!keepPlaceMode)placeMode='alternate';onceNode=null;shown.clear();if(placeMode==='alternate'&&controls.anyAI())controls.playing=true;populateModels();save();render();if($('new-dialog'))$('new-dialog').close();if(placeMode==='alternate')schedule();}
 function showNew(){if(!$('recent-studies'))return;$('recent-studies').replaceChildren();for(const entry of library()){const b=document.createElement('button');b.type='button';b.textContent=`${entry.title||'이름 없는 연습'} · ${entry.nodes.length}개 국면`;b.addEventListener('click',()=>run(async()=>{await loadStudy(entry);$('new-dialog').close();}));$('recent-studies').append(b);}$('new-dialog').showModal();}
@@ -470,12 +515,13 @@ function ask(title,message,ok='확인'){const d=$('confirm-dialog');if(!d)return
 async function run(fn){try{await fn();}catch(e){if(e.name!=='AbortError')notice(e.message||'작업 실패',true);}}
 
 // ---- Events ---------------------------------------------------------------
-$('board')?.addEventListener('click',e=>{const t=e.target?.closest?.('[data-action]');if(t){const a=Number(t.dataset.action);if(placeMode!=='alternate')run(()=>handlePlacementClick(a));else run(()=>place(a));}});
-$('board')?.addEventListener('keydown',e=>{if(['Enter',' '].includes(e.key)){const t=e.target?.closest?.('[data-action]');if(t){e.preventDefault();const a=Number(t.dataset.action);if(placeMode!=='alternate')run(()=>handlePlacementClick(a));else run(()=>place(a));}}});
+$('board')?.addEventListener('click',e=>{const t=e.target?.closest?.('[data-action]');if(t){const a=Number(t.dataset.action);run(()=>handleBoardClick(a));}});
+$('board')?.addEventListener('keydown',e=>{if(['Enter',' '].includes(e.key)){const t=e.target?.closest?.('[data-action]');if(t){e.preventDefault();const a=Number(t.dataset.action);run(()=>handleBoardClick(a));}}});
 $('mode-alternate')?.addEventListener('click',()=>setPlaceMode('alternate'));
 $('mode-place-red')?.addEventListener('click',()=>setPlaceMode(placeMode==='place-red'?'alternate':'place-red'));
 $('mode-place-blue')?.addEventListener('click',()=>setPlaceMode(placeMode==='place-blue'?'alternate':'place-blue'));
 $('mode-place-neutral')?.addEventListener('click',()=>setPlaceMode(placeMode==='place-neutral'?'alternate':'place-neutral'));
+$('mode-remove')?.addEventListener('click',()=>setPlaceMode(placeMode==='remove'?'alternate':'remove'));
 $('turn-order-red')?.addEventListener('click',()=>run(()=>setTurnSide('first')));
 $('turn-order-blue')?.addEventListener('click',()=>run(()=>setTurnSide('second')));
 $('analyze-button')?.addEventListener('click',()=>{if(analyzing){if(analysisKind==='ai')controls.playing=false;cancel();render();return;}if(settings.onceAutoShow)onceNode=active().id;run(()=>startAnalysis());});

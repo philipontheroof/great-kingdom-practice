@@ -31,7 +31,7 @@ export function lineThrough(doc,id) {
 }
 
 export function addNode(doc,parent,action,position) {
-  if(!Number.isInteger(action)||action<0||action>81) throw Error('잘못된 착수입니다.');
+  if(!Number.isInteger(action)||action<0||action>500) throw Error('잘못된 착수입니다.');
   const ancestor=doc.nodes.find(n=>n.id===parent);
   if(!ancestor) throw Error('부모 국면이 없습니다.');
   let child=doc.nodes.find(n=>n.parent===parent&&n.action===action);
@@ -50,7 +50,7 @@ export function importDocument(value) {
   const seen=new Set(),edges=new Set();
   value.nodes.forEach((node,i)=>{
     if(!node||typeof node.id!=='string'||!(/^[A-Za-z0-9_-]{1,64}$/).test(node.id)||seen.has(node.id))throw Error('중복되거나 잘못된 국면 ID입니다.');
-    if(i===0?(node.parent!==null||node.action!==null):(!seen.has(node.parent)||!Number.isInteger(node.action)||node.action<0||node.action>81))throw Error('잘못된 분기 구조입니다.');
+    if(i===0?(node.parent!==null||node.action!==null):(!seen.has(node.parent)||!Number.isInteger(node.action)||node.action<0||node.action>500))throw Error('잘못된 분기 구조입니다.');
     const edge=JSON.stringify([node.parent,node.action]);if(edges.has(edge))throw Error('중복된 분기입니다.');
     edges.add(edge);seen.add(node.id);
   });

@@ -11,7 +11,14 @@ export function tileLayers(position,index,prediction=null) {
 }
 
 export function boardSvg(position,{actions=[],lastAction=null,analysis=null,showTerritory=true,showOwnership=false,showCandidates=false,showNumbers=true}={}) {
-  const nums=new Map();actions.forEach((a,i)=>{if(a!==81)nums.set(a,i+1);});
+  const nums=new Map();
+  actions.forEach((a,i)=>{
+    if(a===null||a===81)return;
+    if(a>=400)nums.delete(a-400);
+    else if(a>=100)nums.set(a%100,i+1);
+    else nums.set(a,i+1);
+  });
+  const lastCell=(lastAction===null||lastAction===81)?null:(lastAction>=400?null:(lastAction>=100?(lastAction%100):lastAction));
   const candidates=(analysis?.mcts?.candidates||[]).filter(c=>c.action!==81).slice(0,8);
   const ranks=new Map(candidates.map((c,i)=>[c.action,{...c,rank:i+1}]));
   const legal=new Set(position.legal_actions||[]),marks=new Set(position.terminal_marks||[]);
@@ -42,7 +49,7 @@ export function boardSvg(position,{actions=[],lastAction=null,analysis=null,show
       <circle cx="${x}" cy="${y}" r="14" fill="none" stroke="#172033" stroke-opacity=".18" stroke-width="1.5"/>`;
       if(marks.has(i))svg+=`<path data-terminal="${i}" d="M${x-20} ${y-20}l40 40m0-40l-40 40" stroke="#ff3b30" stroke-width="8" stroke-linecap="round"/>`;
       if(showNumbers&&nums.has(i))svg+=`<text class="move-number" x="${x}" y="${y}" fill="${tile.castle===3?'#233042':'white'}">${nums.get(i)}</text>`;
-      if(lastAction===i)svg+=`<rect data-last="${i}" x="${x-27}" y="${y-27}" width="54" height="54" rx="6" fill="none" stroke="#172f48" stroke-width="2.5"/>`;
+      if(lastCell===i)svg+=`<rect data-last="${i}" x="${x-27}" y="${y-27}" width="54" height="54" rx="6" fill="none" stroke="#172f48" stroke-width="2.5"/>`;
     } else if(showCandidates&&rank) {
       svg+=`<circle cx="${x}" cy="${y-(tile.predictedOwner?5:0)}" r="20" class="candidate-dot ${rank.rank===1?'best':''}"/><text class="candidate-number" x="${x}" y="${y-(tile.predictedOwner?5:0)}">${(rank.visit_share*100).toFixed(1)}%</text>`;
     }
