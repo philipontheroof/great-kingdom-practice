@@ -67,20 +67,22 @@ async function analyze(id,payload,options,runGeneration){
   if(!Number.isInteger(visits)||visits<1||visits>1600||!Number.isFinite(seconds)||seconds<.05||seconds>10)throw Error('Analysis budget is outside the supported range');
   const continuous=payload.continuous??options.continuous??false;
   if(typeof continuous!=='boolean')throw Error('continuous must be a boolean');
-  let maxVisits=visits;
-  if(continuous){maxVisits=payload.max_visits??10_000_000;if(!Number.isInteger(maxVisits)||maxVisits<1||maxVisits>10_000_000)throw Error('Continuous visit limit must be 1–10,000,000 visits');}
-  else if(Object.hasOwn(payload,'max_visits'))throw Error('max_visits is only valid for continuous analysis');
+  let maxVisits=visits,maxSeconds=null;
+  if(continuous){maxVisits=payload.max_visits??10_000_000;if(!Number.isInteger(maxVisits)||maxVisits<1||maxVisits>10_000_000)throw Error('Continuous visit limit must be 1–10,000,000 visits');
+    // Optional wall-clock cap for continuous analysis and timed AI moves.
+    if(payload.max_seconds!==undefined&&payload.max_seconds!==null){maxSeconds=payload.max_seconds;if(typeof maxSeconds!=='number'||!Number.isFinite(maxSeconds)||maxSeconds<.05||maxSeconds>3600)throw Error('Continuous time limit must be 0.05–3600 seconds');}}
+  else if(Object.hasOwn(payload,'max_visits')||Object.hasOwn(payload,'max_seconds'))throw Error('max_visits/max_seconds are only valid for continuous analysis');
   const base=()=>({api_version:1,state_id:pos.state_id,position:pos,perspective:state.side_to_move,score_kind:'raw_territory_difference',budget:{visits,seconds},model:{id:manifest.model_id,sha256:manifest.sha256,label:manifest.source_model_label,feature_schema:manifest.feature_schema,ruleset_version:manifest.ruleset_version,score_min:manifest.score_min},execution:'browser',backend});
   if(state.result)return {...base(),source:'rule',raw_network:null,exact:{source:'rule',proven_winner:state.result.winner,status:'terminal',threats:[]},proven_winner:state.result.winner,recommended_action:null,mcts:{root_visits:0,root_win_probability:state.result.winner===state.side_to_move?1:0,candidates:[],principal_variation:[],elapsed_seconds:0},done:true,cumulative_elapsed_seconds:(performance.now()-streamStartedAt)/1000};
   // Keep the four raw heads available even when tactics bypass neural expansion.
   // BrowserSearch consumes this cached result for its root expansion.
   const raw=await infer(state),searchStartedAt=performance.now(),search=new BrowserSearch(state,async s=>s===state?raw:infer(s));
-  const deadline=searchStartedAt+seconds*1000;let snapshot,lastUpdateAt=null;
+  const deadline=searchStartedAt+seconds*1000,continuousDeadline=maxSeconds===null?Infinity:streamStartedAt+maxSeconds*1000;let snapshot,lastUpdateAt=null;
   do{
     if(runGeneration!==generation)throw new DOMException('Analysis cancelled','AbortError');
     const remaining=maxVisits-search.rootVisits;
-    snapshot=await search.advance(continuous?Math.min(8,remaining):Math.min(8,visits-search.rootVisits),{deadline:continuous?Infinity:deadline,stopped:()=>runGeneration!==generation});
-    const done=!continuous?(snapshot.mcts.root_visits>=visits||performance.now()>=deadline):snapshot.mcts.root_visits>=maxVisits;
+    snapshot=await search.advance(continuous?Math.min(8,remaining):Math.min(8,visits-search.rootVisits),{deadline:continuous?continuousDeadline:deadline,stopped:()=>runGeneration!==generation});
+    const done=!continuous?(snapshot.mcts.root_visits>=visits||performance.now()>=deadline):(snapshot.mcts.root_visits>=maxVisits||performance.now()>=continuousDeadline);
     const result={...snapshot,...base(),raw_network:{policy:raw.policy82,win_probability:raw.win_probability,expected_score:raw.expected_score,score_min:raw.score_min,score_distribution:raw.score_distribution,territory_probabilities:raw.territory_probabilities},done,cumulative_elapsed_seconds:(performance.now()-streamStartedAt)/1000};
     const now=performance.now();
     // Coalesce very fast tactical batches so a continuous search does not

@@ -1,6 +1,6 @@
 <!doctype html>
 <html data-execution="local" lang="ko">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#172e45"><title>Great Kingdom · 연습실</title><link rel="icon" href="data:,"><link rel="stylesheet" href="./style.css"><script type="module" src="./app.mjs?v=2"></script></head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#172e45"><title>Great Kingdom · 연습실</title><link rel="icon" href="data:,"><link rel="stylesheet" href="./style.css?v=3"><script type="module" src="./app.mjs?v=3"></script></head>
 <body>
   <main>
     <div class="study-toolbar"><div class="study-heading"><p class="eyebrow">PRACTICE WORKSPACE</p><input id="title" aria-label="기보 이름" maxlength="120" value="새로운 연습"><span id="save-state" class="saved">기기에 저장</span></div><div class="toolbar-actions"><button id="import-button" class="quiet-button">불러오기</button><button id="export-button" class="quiet-button">내보내기</button><button id="new-button" class="primary-button"><span>＋</span> 새 대국</button><input id="import-file" type="file" accept=".json,application/json" hidden></div></div>
@@ -9,29 +9,88 @@
       <section class="board-panel panel">
         <div class="board-top"><span id="connection" class="muted">실행부 연결 중</span><div class="game-condition"><span id="setup-label">중립 성 중앙</span><span>·</span><span id="komi-label">덤 2.5</span></div></div>
         <div class="players"><div class="player"><span class="castle-mini red"></span><div><span id="red-player">나</span><small>빨간 성 · 선공</small></div><strong id="red-score">0<small>영토</small></strong></div><span class="versus">vs</span><div class="player blue-side"><strong id="blue-score">0<small>영토</small></strong><div><span id="blue-player">Champion</span><small>파란 성 · 후공</small></div><span class="castle-mini blue"></span></div></div>
-        <div class="board-wrap" id="board" aria-busy="true"></div>
+        <div class="board-stage">
+          <div id="win-column" class="win-column" aria-label="빨간 성의 예상 승률" hidden><span class="win-end blue">파랑<b id="blue-percent">—</b></span><div class="vbar"><div id="win-fill"></div><i class="vbar-mid"></i></div><span class="win-end red">빨강<b id="red-percent">—</b></span><strong id="win-value" class="win-value">—</strong></div>
+          <div class="board-wrap" id="board" aria-busy="true"></div>
+        </div>
         <div class="turn-strip"><span id="turn-dot" class="turn-dot red"></span><span id="turn-label">판을 준비하고 있어요</span><span id="ply-label">시작 국면</span></div>
         <div class="navigation"><button id="first" class="icon-button" aria-label="처음으로">⇤</button><button id="previous" class="icon-button" aria-label="이전 수">←</button><span id="nav-label">0수</span><button id="next" class="icon-button" aria-label="다음 수">→</button><button id="last" class="icon-button" aria-label="마지막 수">⇥</button><div class="nav-spacer"></div><button id="pass" class="quiet-button">패스</button></div>
-        <div class="board-options"><label><input id="territory-toggle" type="checkbox" checked> 확정 영토</label><label><input id="ownership-toggle" type="checkbox" checked> 예상 영역</label><label><input id="numbers-toggle" type="checkbox" checked> 수 번호</label></div>
-        <div class="board-legend"><span><i class="swatch territory-red"></i>빨간 영토</span><span><i class="swatch territory-blue"></i>파란 영토</span><span><i class="castle-mini neutral"></i>중립 성</span><span id="preview-label" hidden>점선·숫자 = 예측 확률 · 회색 = 미소유</span></div>
+        <div class="board-legend"><span><i class="swatch territory-red"></i>빨간 영토</span><span><i class="swatch territory-blue"></i>파란 영토</span><span><i class="castle-mini neutral"></i>중립 성</span><span id="preview-label" hidden>점선·숫자 = 예상 영역 확률 · 회색 = 미소유</span></div>
+        <section class="result-card" aria-label="분석 결과">
+          <div class="result-head"><h3>분석 결과</h3><span id="analysis-source" class="source-tag">분석 전</span></div>
+          <p id="result-empty" class="empty-state">시각화가 꺼져 있어요. 오른쪽 <b>1 · 시각화</b>에서 켤 수 있어요.</p>
+          <div id="result-body" hidden>
+            <div class="metric-grid"><div id="margin-box"><small><span id="margin-caption">예상 집차이</span> <span title="모델의 예상 영토 차이에서 덤을 반영한 값 · 빨강 기준">ⓘ</span></small><strong id="margin-value">—</strong></div><div><small>실제 탐색량</small><strong id="visits-value">—</strong></div></div>
+            <div id="raw-value" class="raw-value">모델 원평가와 탐색 결과를 구분해서 보여줘요.</div>
+            <div id="pv-box"><div class="section-heading"><h3>예상 수순</h3><button id="pv-import" class="text-button" disabled>분기로 가져오기 ↗</button></div><div id="pv" class="pv-list"><span class="muted">분석 후 확인할 수 있어요.</span></div><button id="preview-exit" class="quiet-button full-width" hidden>미리보기 닫기</button></div>
+            <div id="candidate-box"><div class="section-heading"><h3>착수 확률 · 추천수</h3><span id="candidate-count">상위 후보</span></div><div class="candidate-head"><span>순위 / 위치</span><span>탐색 비중</span><span>승률</span></div><div id="candidates" class="candidates"><p class="empty-state">분석하면 후보수가 여기에 나타나요.</p></div><p class="candidate-help">방문 비율은 승률과 달라요. 승률·Q·점수는 빨강 기준, 후보 점수는 덤 전입니다. 후보를 누르면 새 분기를 만들어요.</p></div>
+            <details class="more-metrics"><summary>자세한 분석값</summary><div id="more-metrics" class="metrics-detail">분석 전</div><div id="score-distribution" aria-label="모델 예상 영토 차이 분포"></div></details>
+          </div>
+        </section>
       </section>
-      <aside class="analysis-panel panel">
-        <div class="panel-heading"><h2>분석과 대국</h2><span id="analysis-source" class="source-tag">분석 전</span></div>
-<div class="control-box"><div class="button-grid"><button id="analyze-button" class="quiet-button">분석</button><button id="auto-analysis" class="quiet-button" aria-pressed="false">자동 분석</button><button id="visualize" class="quiet-button" aria-pressed="false">시각화</button><button id="auto-visual" class="quiet-button" aria-pressed="false">자동 시각화</button></div><p class="control-help">분석은 중지할 때까지 누적 · 시각화는 현재 값 · 자동 시각화는 실시간 반영</p><div id="search-status" class="search-status" role="status">대기 중 · 0 visits</div></div>
-<div class="ai-controls"><label>AI 담당<select id="ai-color"><option value="none">없음 · 사람 vs 사람</option><option value="first">빨강 · AI 선공</option><option value="second">파랑 · AI 후공</option><option value="both">양쪽 · AI vs AI</option></select></label><label>한 수 생각 시간<select id="ai-seconds"><option value="1">1초</option><option value="2" selected>2초</option><option value="5">5초</option><option value="10">10초</option></select></label><button id="ai-play" class="accent-button">AI 대국 시작</button></div>
-        <div class="model-control"><label for="backend">계산 위치</label><select id="backend"><option value="host">연결된 Mac · CPU</option><option value="local">이 기기 · WebGPU / WASM</option></select><small id="runtime-note">Mac에서 계산</small><label for="model-select">사용 모델</label><select id="model-select" aria-label="사용 모델"><option>모델 확인 중</option></select><small id="model-detail">모델을 불러오고 있어요</small></div>
-        <div class="evaluation"><div class="evaluation-heading"><span>빨간 성의 예상 승률</span><span id="win-value">—</span></div><div class="win-bar"><div id="win-fill"></div></div><div class="evaluation-sub"><span>빨강 <b id="red-percent">—</b></span><span>파랑 <b id="blue-percent">—</b></span></div><div class="metric-grid"><div><small><span id="margin-caption">예상 점수 차이</span> <span title="모델의 예상 영토 차이에서 덤을 반영한 값">ⓘ</span></small><strong id="margin-value">—</strong></div><div><small>실제 탐색량</small><strong id="visits-value">—</strong></div></div><div id="raw-value" class="raw-value">모델 원평가와 탐색 결과를 구분해서 보여줘요.</div></div>
-
-        <div class="section-heading"><h3>추천수</h3><span id="candidate-count">상위 후보</span></div>
-        <div class="candidate-head"><span>순위 / 위치</span><span>탐색 비중</span><span>승률</span></div><div id="candidates" class="candidates"><p class="empty-state">분석하면 후보수가 여기에 나타나요.</p></div>
-        <p class="candidate-help">방문 비율은 승률과 달라요. 승률·Q·점수는 빨강 기준, 후보 점수는 덤 전입니다. 후보를 누르면 새 분기를 만들어요.</p>
-        <div class="section-heading"><h3>예상 수순</h3><button id="pv-import" class="text-button" disabled>분기로 가져오기 ↗</button></div><div id="pv" class="pv-list"><span class="muted">분석 후 확인할 수 있어요.</span></div><button id="preview-exit" class="quiet-button full-width" hidden>미리보기 닫기</button>
-        <details class="more-metrics"><summary>자세한 분석값</summary><div id="more-metrics" class="metrics-detail">분석 전</div><div id="score-distribution" aria-label="모델 예상 영토 차이 분포"></div></details>
+      <aside class="analysis-panel panel settings-panel" aria-label="설정">
+        <details class="settings-group" open>
+          <summary><span class="group-no">1</span>모델</summary>
+          <section class="settings-sub">
+            <h3>모델 선택</h3>
+            <select id="model-select" aria-label="사용 모델"><option>모델 확인 중</option></select>
+            <small id="model-detail" class="hint">모델을 불러오고 있어요</small>
+            <small id="runtime-note" class="hint">이 기기에서 계산 준비 중</small>
+          </section>
+          <section class="settings-sub">
+            <h3>분석</h3>
+            <div id="search-status" class="search-status" role="status">분석 전 · 0 visits</div>
+            <button id="analyze-button" class="primary-button full-width">이번 턴만 분석 시작</button>
+            <label class="switch-row nested"><input id="once-auto-show" type="checkbox" role="switch"><span>누르면 이번 턴 시각화도 켜기</span></label>
+            <div class="field-label">이번 턴부터 계속 분석</div>
+            <div class="pair"><label class="switch-row side-red"><input id="continuous-first" type="checkbox" role="switch"><span>빨강 턴</span></label><label class="switch-row side-blue"><input id="continuous-second" type="checkbox" role="switch"><span>파랑 턴</span></label></div>
+            <div class="field-label">최대 탐색량</div>
+            <div class="budget"><input id="analysis-limit-value" type="number" inputmode="decimal" aria-label="분석 최대 탐색량"><select id="analysis-limit-unit" aria-label="분석 제한 단위"><option value="visits">visits</option><option value="seconds">초</option><option value="none">무제한</option></select></div>
+            <small id="analysis-limit-hint" class="hint"></small>
+          </section>
+          <section class="settings-sub">
+            <h3>시각화</h3>
+            <div class="pair"><button id="visual-once" class="quiet-button" aria-pressed="false">이번 턴만 보기</button><label class="switch-row" id="visual-continuous-row"><input id="visual-continuous" type="checkbox" role="switch"><span>계속 실시간 보기</span></label></div>
+            <small id="visual-hint" class="hint"></small>
+            <div class="field-label">표시할 항목</div>
+            <div class="chip-toggles"><label><input id="ownership-toggle" type="checkbox"><span>예상 영역</span></label><label><input id="layer-policy" type="checkbox"><span>착수 확률</span></label><label><input id="layer-win" type="checkbox"><span>승률</span></label><label><input id="layer-margin" type="checkbox"><span>예상 집차이</span></label><label><input id="layer-pv" type="checkbox"><span>예상 수순</span></label></div>
+          </section>
+          <section class="settings-sub">
+            <h3>착수</h3>
+            <div class="play-row side-red"><label class="switch-row"><input id="play-first" type="checkbox" role="switch"><span>AI가 빨강 착수</span></label><div class="budget"><input id="play-first-value" type="number" inputmode="decimal" aria-label="빨강 착수 탐색량"><select id="play-first-unit" aria-label="빨강 착수 단위"><option value="visits">visits</option><option value="seconds">초</option></select></div></div>
+            <div class="play-row side-blue"><label class="switch-row"><input id="play-second" type="checkbox" role="switch"><span>AI가 파랑 착수</span></label><div class="budget"><input id="play-second-value" type="number" inputmode="decimal" aria-label="파랑 착수 탐색량"><select id="play-second-unit" aria-label="파랑 착수 단위"><option value="visits">visits</option><option value="seconds">초</option></select></div></div>
+            <div class="play-status"><span id="play-status" class="hint">AI 착수 꺼짐 · 양쪽을 직접 둡니다</span><button id="ai-resume" class="text-button" hidden>AI 착수 재개</button></div>
+          </section>
+        </details>
+        <details class="settings-group" open>
+          <summary><span class="group-no">2</span>일반 시각화</summary>
+          <section class="settings-sub">
+            <div class="chip-toggles"><label><input id="territory-toggle" type="checkbox"><span>확정 영토</span></label><label><input id="numbers-toggle" type="checkbox"><span>수 번호</span></label></div>
+          </section>
+        </details>
+        <a class="tree-link" href="#tree-panel"><span class="group-no">3</span>게임 브랜칭 트리는 판 아래에 있어요 ↓</a>
       </aside>
-      <section class="timeline-panel panel"><div class="panel-heading"><h2>선택한 가지의 흐름과 수순</h2><div class="graph-tabs"><button id="graph-win" class="active">승률</button><button id="graph-score">집 차이</button></div></div><p class="graph-note">빨강 기준 · 가로축은 수수 · 위는 선택 가지 평가, 아래는 모든 분기 · 국면을 눌러 이동</p><div id="timeline" class="timeline-scroll" aria-label="평가 그래프와 수순 분기"></div><div class="batch-controls"><label>미분석 범위<select id="batch-scope"><option value="branch">선택 가지</option><option value="all">모든 가지</option></select></label><label>국면당 시간<select id="batch-seconds"><option value=".2">0.2초</option><option value="1" selected>1초</option><option value="2">2초</option><option value="5">5초</option></select></label><label>최대 방문수<input id="batch-visits" type="number" min="1" max="1600" value="160"></label><button id="batch-start" class="quiet-button">미분석 구간 계산</button><span id="batch-status" class="muted"></span></div><label class="notes-label" for="notes">이 국면의 메모</label><textarea id="notes" maxlength="6000" placeholder="이 수를 둔 이유와 다음에 바꿀 점…"></textarea></section>
+      <section class="timeline-panel panel" id="tree-panel">
+        <div class="panel-heading"><h2><span class="group-no">3</span>게임 브랜칭 트리</h2><div class="graph-tabs"><button id="graph-win" class="active">승률</button><button id="graph-score">집차이</button></div></div>
+        <p class="graph-note">빨강 기준 · 위는 선택 가지의 평가, 아래는 모든 분기 · 노드를 눌러 그 국면으로 이동 · <span class="memo-dot-inline"></span> 메모 있음</p>
+        <div id="timeline" class="timeline-scroll" aria-label="평가 그래프와 수순 분기"></div>
+        <div class="tree-tools">
+          <section class="tree-tool">
+            <h3>한번에 다시 분석</h3>
+            <div class="batch-controls"><label>범위<select id="batch-scope"><option value="branch">선택 가지</option><option value="all">모든 가지</option></select></label><label>대상<select id="batch-target"><option value="missing">미분석 국면만</option><option value="all">분석된 국면도 다시</option></select></label><label>국면당 탐색량<span class="budget"><input id="batch-value" type="number" inputmode="decimal" aria-label="국면당 탐색량"><select id="batch-unit" aria-label="일괄 분석 단위"><option value="visits">visits</option><option value="seconds">초</option></select></span></label><button id="batch-start" class="quiet-button">한번에 분석</button></div>
+            <span id="batch-status" class="muted"></span>
+          </section>
+          <section class="tree-tool">
+            <h3>메모</h3>
+            <label class="notes-label" for="notes">이 국면의 메모</label><textarea id="notes" maxlength="6000" placeholder="이 수를 둔 이유와 다음에 바꿀 점…"></textarea>
+            <div id="memo-list" class="memo-list" aria-label="메모가 있는 국면"></div>
+          </section>
+        </div>
+      </section>
     </section>
-
+    <datalist id="visit-presets"><option value="100"></option><option value="400"></option><option value="800"></option><option value="1600"></option><option value="3200"></option><option value="10000"></option></datalist>
+    <datalist id="second-presets"><option value="0.5"></option><option value="1"></option><option value="2"></option><option value="5"></option><option value="10"></option><option value="30"></option></datalist>
   </main>
-  <dialog id="new-dialog"><form id="new-form"><div class="dialog-heading"><div><p class="eyebrow">NEW PRACTICE</p><h2>새로운 한 판</h2></div><button type="button" id="new-close" class="icon-button" aria-label="닫기">×</button></div><p class="muted">AI 담당 색과 생각 시간은 판 옆에서 정할 수 있어요.</p><label>중립 성<select id="neutral-setup"><option value="center">중앙</option><option value="none">없음</option><option value="custom">직접 위치 선택</option></select></label><div id="neutral-coordinates" class="coordinate-fields" hidden><label>행<input id="neutral-row" type="number" min="1" max="9" value="5"></label><label>열<input id="neutral-col" type="number" min="1" max="9" value="5"></label></div><label>파란 성의 덤<input id="komi" type="number" step="any" value="2.5"></label><button type="submit" class="primary-button full-width">대국 시작하기 →</button><div class="recent-heading">이 기기의 최근 연습</div><div id="recent-studies"></div></form></dialog>
-  <dialog id="help-dialog"><div class="dialog-heading"><h2>사용법</h2><button id="help-close" class="icon-button" aria-label="닫기">×</button></div><p>분석은 현재 국면에서 중지할 때까지 탐색을 누적합니다. 자동 분석은 이동한 국면에서도 새로 시작합니다.</p><p>시각화는 현재 결과를 보여줍니다. 자동 시각화를 켜면 결과를 실시간 반영합니다. 둘 다 끄고 AI와 둘 수도 있습니다.</p><p>AI 담당을 없음/빨강/파랑/양쪽에서 정하고 대국을 시작하세요. 수순을 이동하면 AI 대국은 일시 정지됩니다.</p><p>판의 숫자 %는 추천수의 방문 비율입니다. 예상 영역의 색 진하기와 숫자는 모델이 그 소유자로 예측한 확률입니다. 회색은 미소유 예상, 확정 영토는 별도 스위치입니다.</p><p>기기 내 계산은 처음에 모델을 내려받고 Worker의 WebGPU 또는 WASM으로 실행합니다. 실제 iPad 성능은 별도 검증이 필요합니다. 기보는 이 브라우저에 저장되며 파일로 내보낼 수 있습니다.</p></dialog>
+  <dialog id="new-dialog"><form id="new-form"><div class="dialog-heading"><div><p class="eyebrow">NEW PRACTICE</p><h2>새로운 한 판</h2></div><button type="button" id="new-close" class="icon-button" aria-label="닫기">×</button></div><p class="muted">AI 착수 색과 탐색량은 판 옆 <b>1 · 착수</b>에서 정할 수 있어요.</p><label>중립 성<select id="neutral-setup"><option value="center">중앙</option><option value="none">없음</option><option value="custom">직접 위치 선택</option></select></label><div id="neutral-coordinates" class="coordinate-fields" hidden><label>행<input id="neutral-row" type="number" min="1" max="9" value="5"></label><label>열<input id="neutral-col" type="number" min="1" max="9" value="5"></label></div><label>파란 성의 덤<input id="komi" type="number" step="any" value="2.5"></label><button type="submit" class="primary-button full-width">대국 시작하기 →</button><div class="recent-heading">이 기기의 최근 연습</div><div id="recent-studies"></div></form></dialog>
+  <dialog id="confirm-dialog"><form method="dialog"><h2 id="confirm-title">확인</h2><p id="confirm-message"></p><div class="dialog-actions"><button value="cancel" id="confirm-cancel" class="quiet-button">취소</button><button value="ok" id="confirm-ok" class="primary-button">확인</button></div></form></dialog>
 </body></html>
