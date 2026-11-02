@@ -9,6 +9,29 @@
       <section class="board-panel panel">
         <div class="board-top"><span id="connection" class="muted">실행부 연결 중</span><div class="game-condition"><span id="setup-label">중립 성 중앙</span><span>·</span><span id="komi-label">덤 2.5</span></div></div>
         <div class="players"><div class="player"><span class="castle-mini red"></span><div><span id="red-player">나</span><small>빨간 성 · 선공</small></div><strong id="red-score">0<small>영토</small></strong></div><span class="versus">vs</span><div class="player blue-side"><strong id="blue-score">0<small>영토</small></strong><div><span id="blue-player">Champion</span><small>파란 성 · 후공</small></div><span class="castle-mini blue"></span></div></div>
+        <div class="placement-bar" role="toolbar" aria-label="착수 모드 및 성 배치">
+          <div class="placement-modes" role="radiogroup" aria-label="착수 모드">
+            <button type="button" id="mode-alternate" class="mode-btn active" aria-pressed="true" title="번갈아 가며 착수합니다">
+              <span class="mode-icon">⚔️</span> 번갈아 착수
+            </button>
+            <button type="button" id="mode-place-red" class="mode-btn mode-red" aria-pressed="false" title="판을 클릭하면 빨간 성을 1회 배치/제거합니다">
+              <span class="castle-mini red"></span> 빨간 성 배치
+            </button>
+            <button type="button" id="mode-place-blue" class="mode-btn mode-blue" aria-pressed="false" title="판을 클릭하면 파란 성을 1회 배치/제거합니다">
+              <span class="castle-mini blue"></span> 파란 성 배치
+            </button>
+            <button type="button" id="mode-place-neutral" class="mode-btn mode-neutral" aria-pressed="false" title="판을 클릭하면 중립 성을 1회 배치/제거합니다">
+              <span class="castle-mini neutral"></span> 중립 성 배치
+            </button>
+          </div>
+          <div class="turn-order-wrap">
+            <span class="turn-order-title">이번 턴 착수:</span>
+            <div class="turn-order-buttons" role="group" aria-label="이번 턴 착수 순서">
+              <button type="button" id="turn-order-red" class="turn-order-btn active side-red" title="이번 턴부터 빨간 성이 먼저 착수합니다">🔴 빨강 먼저</button>
+              <button type="button" id="turn-order-blue" class="turn-order-btn" title="이번 턴부터 파란 성이 먼저 착수합니다">🔵 파랑 먼저</button>
+            </div>
+          </div>
+        </div>
         <div class="board-stage">
           <div id="win-column" class="win-column" aria-label="빨간 성의 예상 승률" hidden><span class="win-end blue">파랑<b id="blue-percent">—</b></span><div class="vbar"><div id="win-fill"></div><i class="vbar-mid"></i></div><span class="win-end red">빨강<b id="red-percent">—</b></span><strong id="win-value" class="win-value">—</strong></div>
           <div class="board-wrap" id="board" aria-busy="true"></div>

@@ -17,7 +17,8 @@ const settings={
  territory:true,numbers:true,
  batch:{scope:'branch',target:'missing',budget:{unit:'seconds',value:1.0}},
 };
-let lastPaint=0,doc=null,config=null,analyzing=false,analysisKind=null,moving=false,analysisController=null,preview=null,graphMode='win',saveTimer=null,local=null,localModel=null,batching=false,backendReady=true,onceNode=null;
+let lastPaint=0,doc=null,config=null,analyzing=false,analysisKind=null,moving=false,analysisController=null,preview=null,graphMode='win',saveTimer=null,local=null,localModel=null,batching=false,backendReady=true,onceNode=null,placeMode='alternate';
+const canAiPlay=()=>placeMode==='alternate';
 const active=()=>doc?.nodes.find(n=>n.id===doc.selected);
 const backend=()=>$('backend')?.value||(staticOnly?'local':'host');
 const modelAvailable=()=>backendReady&&Boolean(config?.models.some(m=>m.id===doc?.model_id))&&(backend()==='host'||localModel===doc?.model_id);
@@ -110,8 +111,75 @@ function acceptResult(result,node,model,execution){
  shown.set(node.id,node.analysis);
  if(execution==='local'&&result.backend&&$('runtime-note'))$('runtime-note').textContent=`이 기기에서 계산 · ${result.backend} · 서버 추론 없음`;
 }
+function setPlaceMode(mode){
+ placeMode=mode;
+ if(mode!=='alternate'){
+  cancel();controls.playing=false;
+  notice(mode==='place-red'?'🔴 빨간 성 배치: 판을 클릭하면 빨간 성을 배치하거나 제거합니다. (1회 배치 후 자동 복귀)':mode==='place-blue'?'🔵 파란 성 배치: 판을 클릭하면 파란 성을 배치하거나 제거합니다. (1회 배치 후 자동 복귀)':'⚪ 중립 성 배치: 판을 클릭하면 중립 성을 배치하거나 제거합니다. (1회 배치 후 자동 복귀)');
+ }else{
+  notice('');
+ }
+ render();
+ if(mode==='alternate')schedule();
+}
+async function handlePlacementClick(action){
+ const stoneColor=placeMode==='place-red'?1:placeMode==='place-blue'?2:placeMode==='place-neutral'?3:0;
+ if(!stoneColor)return;
+ if(doc.nodes.length>1){
+  const ok=await ask('새 연습으로 시작할까요?','수순이 진행된 대국입니다. 현재 판에 성을 배치하여 새 연습을 시작할까요?','새 연습 시작');
+  if(!ok){setPlaceMode('alternate');return;}
+  const curBoard=active().position.board.slice();
+  curBoard[action]=curBoard[action]===stoneColor?0:stoneColor;
+  const nIdx=curBoard.indexOf(3);
+  await createGame({board:curBoard,side_to_move:active().position.side_to_move,neutral:nIdx>=0?[Math.floor(nIdx/9),nIdx%9]:null,komi:doc.setup.komi});
+  setPlaceMode('alternate');
+  return;
+ }
+ const curBoard=(doc.setup.board?doc.setup.board.slice():active().position.board.slice());
+ curBoard[action]=curBoard[action]===stoneColor?0:stoneColor;
+ const nIdx=curBoard.indexOf(3);
+ doc.setup.neutral=nIdx>=0?[Math.floor(nIdx/9),nIdx%9]:null;
+ doc.setup.board=curBoard;
+ cancel();
+ const nextPos=await position({setup:doc.setup,actions:[]});
+ active().position=nextPos;
+ active().analysis=null;
+ shown.delete(active().id);
+ onceNode=null;
+ setPlaceMode('alternate');
+ save();
+ render();
+ schedule();
+}
+async function setTurnSide(side){
+ const curSide=active()?.position?.side_to_move;
+ if(curSide===side){
+  if(placeMode!=='alternate')setPlaceMode('alternate');
+  return;
+ }
+ if(doc.nodes.length>1){
+  const ok=await ask('새 연습으로 시작할까요?',`수순이 진행된 대국입니다. 현재 상태에서 ${sideName(side)} 선공으로 새 연습을 시작할까요?`,'새 연습 시작');
+  if(!ok)return;
+  const curBoard=active().position.board.slice();
+  const nIdx=curBoard.indexOf(3);
+  await createGame({board:curBoard,side_to_move:side,neutral:nIdx>=0?[Math.floor(nIdx/9),nIdx%9]:null,komi:doc.setup.komi});
+  setPlaceMode('alternate');
+  return;
+ }
+ doc.setup.side_to_move=side;
+ cancel();
+ const nextPos=await position({setup:doc.setup,actions:[]});
+ active().position=nextPos;
+ active().analysis=null;
+ shown.delete(active().id);
+ onceNode=null;
+ setPlaceMode('alternate');
+ save();
+ render();
+ schedule();
+}
 async function startAnalysis({ai=false,kind=ai?'ai':'once'}={}){
- if(!active()||moving||batching||!modelAvailable())return;
+ if(!active()||moving||batching||!modelAvailable()||(ai&&!canAiPlay()))return;
  cancel();const node=active(),study=doc,model=doc.model_id,execution=backend(),token=controls.begin(node.id,model,execution),controller=new AbortController();analysisController=controller;analyzing=true;analysisKind=kind;
  const budget=ai?settings.play[node.position.side_to_move]:settings.analysisLimit;render();
  const valid=()=>study===doc&&controls.accepts(token,doc.selected,doc.model_id,backend());let result;
@@ -122,9 +190,10 @@ async function startAnalysis({ai=false,kind=ai?'ai':'once'}={}){
  if(ai&&valid()&&controls.aiTurn(node.position)&&result?.recommended_action!==null&&result?.recommended_action!==undefined){await place(result.recommended_action,true);}
 }
 function schedule(){const n=active();if(!n)return;if(n.position.result){render();return;}
+ if(!canAiPlay())return;
  if(controls.aiTurn(n.position))queueMicrotask(()=>run(()=>startAnalysis({ai:true})));
  else if(controls.continuous[n.position.side_to_move]&&!budgetReached(settings.analysisLimit,nodeAnalysis(n)))queueMicrotask(()=>run(()=>startAnalysis({kind:'continuous'})));}
-async function selectNode(id){cancel();controls.playing=false;if(onceNode!==id)onceNode=null;doc.selected=id;save();render();schedule();}
+async function selectNode(id){cancel();controls.playing=false;placeMode='alternate';if(onceNode!==id)onceNode=null;doc.selected=id;save();render();schedule();}
 async function place(action,fromAI=false){
  const node=active();if(moving||preview||node.position.result)return;
  if(!fromAI&&controls.aiTurn(node.position))return notice('AI 차례입니다. AI 착수 토글을 끄면 직접 둘 수 있어요.');
@@ -138,21 +207,56 @@ async function place(action,fromAI=false){
 }
 
 // ---- Rendering ------------------------------------------------------------
+function renderPlacementBar(){
+ const side=active()?.position?.side_to_move||'first';
+ $('mode-alternate')?.classList?.toggle?.('active',placeMode==='alternate');
+ $('mode-alternate')?.setAttribute?.('aria-pressed',String(placeMode==='alternate'));
+ $('mode-place-red')?.classList?.toggle?.('active',placeMode==='place-red');
+ $('mode-place-red')?.setAttribute?.('aria-pressed',String(placeMode==='place-red'));
+ $('mode-place-blue')?.classList?.toggle?.('active',placeMode==='place-blue');
+ $('mode-place-blue')?.setAttribute?.('aria-pressed',String(placeMode==='place-blue'));
+ $('mode-place-neutral')?.classList?.toggle?.('active',placeMode==='place-neutral');
+ $('mode-place-neutral')?.setAttribute?.('aria-pressed',String(placeMode==='place-neutral'));
+
+ const rBtn=$('turn-order-red'),bBtn=$('turn-order-blue');
+ if(rBtn){
+  rBtn.classList?.toggle?.('active',side==='first');
+  rBtn.classList?.toggle?.('side-red',side==='first');
+  rBtn.setAttribute?.('aria-pressed',String(side==='first'));
+ }
+ if(bBtn){
+  bBtn.classList?.toggle?.('active',side==='second');
+  bBtn.classList?.toggle?.('side-blue',side==='second');
+  bBtn.setAttribute?.('aria-pressed',String(side==='second'));
+ }
+}
 function renderBoard(){
  const node=active(),p=preview?.position||node.position,visible=visibleAnalysis();
- if($('board'))$('board').innerHTML=boardSvg(p,{actions:[...pathTo(doc,node.id),...(preview?.actions||[])],lastAction:preview?.actions.at(-1)??node.action,analysis:preview?null:visible,showTerritory:settings.territory,showOwnership:settings.layers.ownership,showCandidates:settings.layers.policy&&Boolean(visible)&&!preview,showNumbers:settings.numbers});
- if($('board'))$('board').setAttribute('aria-busy',String(moving));
+ const boardEl=$('board');
+ if(boardEl){
+  boardEl.classList?.toggle?.('placing-red',placeMode==='place-red');
+  boardEl.classList?.toggle?.('placing-blue',placeMode==='place-blue');
+  boardEl.classList?.toggle?.('placing-neutral',placeMode==='place-neutral');
+  boardEl.innerHTML=boardSvg(p,{actions:[...pathTo(doc,node.id),...(preview?.actions||[])],lastAction:preview?.actions.at(-1)??node.action,analysis:preview?null:visible,showTerritory:settings.territory,showOwnership:settings.layers.ownership,showCandidates:settings.layers.policy&&Boolean(visible)&&!preview,showNumbers:settings.numbers});
+  const svg=boardEl.querySelector?.('svg');
+  if(svg){
+   svg.classList?.toggle?.('placing-red',placeMode==='place-red');
+   svg.classList?.toggle?.('placing-blue',placeMode==='place-blue');
+   svg.classList?.toggle?.('placing-neutral',placeMode==='place-neutral');
+  }
+  boardEl.setAttribute('aria-busy',String(moving));
+ }
  if($('red-score'))$('red-score').innerHTML=`${p.score.red}<small>영토</small>`;
  if($('blue-score'))$('blue-score').innerHTML=`${p.score.blue}<small>영토</small>`;
  if($('red-player'))$('red-player').textContent=controls.aiSide.first?'AI':'사람';
  if($('blue-player'))$('blue-player').textContent=controls.aiSide.second?'AI':'사람';
  if($('turn-dot'))$('turn-dot').className=`turn-dot ${p.side_to_move==='first'?'red':'blue'}`;
- if($('turn-label'))$('turn-label').textContent=preview?`예상 수순 ${preview.actions.length}수`:p.result?`${p.result.winner==='first'?'빨간':'파란'} 성 승리 · ${p.result.reason==='siege'?'포위':'영토 점수'}`:`${p.side_to_move==='first'?'빨간':'파란'} 성 차례${controls.aiTurn(p)?' · AI 생각 중':''}`;
+ if($('turn-label'))$('turn-label').textContent=preview?`예상 수순 ${preview.actions.length}수`:placeMode==='place-red'?'빨간 성 배치 모드 · 판을 클릭하면 빨간 성이 놓여요':placeMode==='place-blue'?'파란 성 배치 모드 · 판을 클릭하면 파란 성이 놓여요':placeMode==='place-neutral'?'중립 성 배치 모드 · 판을 클릭하면 중립 성이 놓여요':p.result?`${p.result.winner==='first'?'빨간':'파란'} 성 승리 · ${p.result.reason==='siege'?'포위':'영토 점수'}`:`${p.side_to_move==='first'?'빨간':'파란'} 성 차례${controls.aiTurn(p)?' · AI 생각 중':''}`;
  if($('ply-label'))$('ply-label').textContent=`${node.ply}수째`;
  if($('nav-label'))$('nav-label').textContent=`${node.ply}수`;
  if($('first'))$('first').disabled=$('previous').disabled=node.parent===null;
  if($('next'))$('next').disabled=$('last').disabled=!doc.nodes.some(n=>n.parent===node.id);
- if($('pass'))$('pass').disabled=Boolean(p.result||preview||moving||controls.aiTurn(p)||(backend()==='local'&&!local));
+ if($('pass'))$('pass').disabled=Boolean(p.result||preview||moving||controls.aiTurn(p)||(backend()==='local'&&!local)||placeMode!=='alternate');
  if($('preview-exit'))$('preview-exit').hidden=!preview;
  if($('preview-label'))$('preview-label').hidden=!(settings.layers.ownership&&visible);
 }
@@ -291,9 +395,9 @@ function renderSettings(){
    if(pUnit)pUnit.value=settings.play[s].unit;
    if(pVal&&document.activeElement!==pVal)pVal.value=String(settings.play[s].value);
  }
- if($('ai-resume')){$('ai-resume').hidden=!(controls.anyAI()&&!controls.playing)||Boolean(node?.position?.result);$('ai-resume').disabled=!modelAvailable()||batching;}
+ if($('ai-resume')){$('ai-resume').hidden=!(controls.anyAI()&&!controls.playing)||Boolean(node?.position?.result)||placeMode!=='alternate';$('ai-resume').disabled=!modelAvailable()||batching||placeMode!=='alternate';}
  const who=SIDES.filter(s=>controls.aiSide[s]).map(sideName).join('·');
- if($('play-status'))$('play-status').textContent=!who?'AI 착수 꺼짐 · 양쪽을 직접 둡니다':controls.playing?`AI가 ${who}을(를) 둡니다`:`AI ${who} 착수 일시정지 · 수순 이동 중`;
+ if($('play-status'))$('play-status').textContent=placeMode!=='alternate'?'성 배치 모드 · AI 착수 대기':!who?'AI 착수 꺼짐 · 양쪽을 직접 둡니다':controls.playing?`AI가 ${who}을(를) 둡니다`:`AI ${who} 착수 일시정지 · 수순 이동 중`;
 
  // 2. 일반 시각화
  setSwitch('territory-toggle',settings.territory);setSwitch('numbers-toggle',settings.numbers);
@@ -318,7 +422,7 @@ function render(){if(!active()?.position)return;
  if($('notes')&&document.activeElement!==$('notes'))$('notes').value=active().notes||'';
  if($('setup-label'))$('setup-label').textContent=doc.setup.neutral===null?'중립 성 없음':`중립 성 ${doc.setup.neutral.map(n=>n+1).join('·')}`;
  if($('komi-label'))$('komi-label').textContent=`덤 ${doc.setup.komi}`;
- renderSettings();renderBoard();renderAnalysis();renderTimeline();
+ renderSettings();renderPlacementBar();renderBoard();renderAnalysis();renderTimeline();
 }
 async function previewPV(count){const a=visibleAnalysis();if(!a||moving)return;const epoch=controls.epoch,node=active(),actions=a.mcts.principal_variation.slice(0,count),p=await position({...positionRequest(),actions:[...pathTo(doc,node.id),...actions]});if(epoch!==controls.epoch)return;preview={position:p,actions};renderBoard();}
 async function importPV(){const actions=visibleAnalysis()?.mcts.principal_variation.slice(0,16)||[];if(!actions.length)return;cancel();controls.playing=false;const epoch=controls.epoch;moving=true;try{for(const a of actions){const p=await position({...positionRequest(),actions:[...pathTo(doc,doc.selected),a]});if(epoch!==controls.epoch)return;addNode(doc,doc.selected,a,p);}onceNode=null;save();}finally{if(epoch===controls.epoch){moving=false;render();schedule();}}}
@@ -345,8 +449,8 @@ async function setupBackend(){
  }catch(e){if(requested===backend()&&model===doc.model_id){backendReady=false;if($('connection'))$('connection').textContent='실행부 준비 실패';notice(e.message,true);render();}}
 }
 async function rebuildStudy(imported){if(backend()==='host')return api('validate-study',studyForSave(imported));const nodes=[];for(const n of imported.nodes){const p=await position({ruleset_version:imported.ruleset_version,setup:imported.setup,actions:pathTo(imported,n.id)});nodes.push({...n,ply:n.parent===null?0:nodes.find(p=>p.id===n.parent).ply+1,position:p,analysis:null});}return {...imported,nodes};}
-async function loadStudy(value,{initializeModel=true,preserveCurrent=true}={}){const imported=importDocument(value);clearTimeout(saveTimer);if(preserveCurrent&&!saveNow())throw Error('현재 기보를 내보내기로 보관해 주세요.');cancel();controls.playing=false;const epoch=controls.epoch,rebuilt=await rebuildStudy(imported);if(epoch!==controls.epoch)return;doc={...rebuilt,storage_id:value.storage_id||crypto.randomUUID()};onceNode=null;shown.clear();populateModels();render();save();if(initializeModel&&backend()==='local'&&localModel!==doc.model_id)await setupBackend();else if(initializeModel)schedule();}
-async function createGame(setup){cancel();controls.playing=false;const epoch=controls.epoch,p=await position({setup,actions:[]});if(epoch!==controls.epoch)return;clearTimeout(saveTimer);if(!saveNow())throw Error('현재 기보를 먼저 보관해 주세요.');const model=doc.model_id;doc={...newStudy(setup,p),storage_id:crypto.randomUUID(),model_id:model};doc.title=`${new Date().toLocaleDateString('ko-KR',{month:'long',day:'numeric'})}의 연습`;onceNode=null;shown.clear();if(controls.anyAI())controls.playing=true;populateModels();save();render();if($('new-dialog'))$('new-dialog').close();schedule();}
+async function loadStudy(value,{initializeModel=true,preserveCurrent=true}={}){const imported=importDocument(value);clearTimeout(saveTimer);if(preserveCurrent&&!saveNow())throw Error('현재 기보를 내보내기로 보관해 주세요.');cancel();controls.playing=false;const epoch=controls.epoch,rebuilt=await rebuildStudy(imported);if(epoch!==controls.epoch)return;doc={...rebuilt,storage_id:value.storage_id||crypto.randomUUID()};placeMode='alternate';onceNode=null;shown.clear();populateModels();render();save();if(initializeModel&&backend()==='local'&&localModel!==doc.model_id)await setupBackend();else if(initializeModel)schedule();}
+async function createGame(setup){cancel();controls.playing=false;const epoch=controls.epoch,p=await position({setup,actions:[]});if(epoch!==controls.epoch)return;clearTimeout(saveTimer);if(!saveNow())throw Error('현재 기보를 먼저 보관해 주세요.');const model=doc.model_id;doc={...newStudy(setup,p),storage_id:crypto.randomUUID(),model_id:model};doc.title=`${new Date().toLocaleDateString('ko-KR',{month:'long',day:'numeric'})}의 연습`;placeMode='alternate';onceNode=null;shown.clear();if(controls.anyAI())controls.playing=true;populateModels();save();render();if($('new-dialog'))$('new-dialog').close();schedule();}
 function showNew(){if(!$('recent-studies'))return;$('recent-studies').replaceChildren();for(const entry of library()){const b=document.createElement('button');b.type='button';b.textContent=`${entry.title||'이름 없는 연습'} · ${entry.nodes.length}개 국면`;b.addEventListener('click',()=>run(async()=>{await loadStudy(entry);$('new-dialog').close();}));$('recent-studies').append(b);}$('new-dialog').showModal();}
 async function batch(){if(batching){cancel();render();return;}if(!modelAvailable())return;
  cancel();controls.playing=false;
@@ -364,8 +468,14 @@ function ask(title,message,ok='확인'){const d=$('confirm-dialog');if(!d)return
 async function run(fn){try{await fn();}catch(e){if(e.name!=='AbortError')notice(e.message||'작업 실패',true);}}
 
 // ---- Events ---------------------------------------------------------------
-$('board')?.addEventListener('click',e=>{const t=e.target?.closest?.('[data-action]');if(t)run(()=>place(Number(t.dataset.action)));});
-$('board')?.addEventListener('keydown',e=>{if(['Enter',' '].includes(e.key)){const t=e.target?.closest?.('[data-action]');if(t){e.preventDefault();run(()=>place(Number(t.dataset.action)));}}});
+$('board')?.addEventListener('click',e=>{const t=e.target?.closest?.('[data-action]');if(t){const a=Number(t.dataset.action);if(placeMode!=='alternate')run(()=>handlePlacementClick(a));else run(()=>place(a));}});
+$('board')?.addEventListener('keydown',e=>{if(['Enter',' '].includes(e.key)){const t=e.target?.closest?.('[data-action]');if(t){e.preventDefault();const a=Number(t.dataset.action);if(placeMode!=='alternate')run(()=>handlePlacementClick(a));else run(()=>place(a));}}});
+$('mode-alternate')?.addEventListener('click',()=>setPlaceMode('alternate'));
+$('mode-place-red')?.addEventListener('click',()=>setPlaceMode(placeMode==='place-red'?'alternate':'place-red'));
+$('mode-place-blue')?.addEventListener('click',()=>setPlaceMode(placeMode==='place-blue'?'alternate':'place-blue'));
+$('mode-place-neutral')?.addEventListener('click',()=>setPlaceMode(placeMode==='place-neutral'?'alternate':'place-neutral'));
+$('turn-order-red')?.addEventListener('click',()=>run(()=>setTurnSide('first')));
+$('turn-order-blue')?.addEventListener('click',()=>run(()=>setTurnSide('second')));
 $('analyze-button')?.addEventListener('click',()=>{if(analyzing){if(analysisKind==='ai')controls.playing=false;cancel();render();return;}if(settings.onceAutoShow)onceNode=active().id;run(()=>startAnalysis());});
 $('once-auto-show')?.addEventListener('change',e=>{settings.onceAutoShow=e.target.checked;saveSettings();render();});
 for(const s of SIDES)$(`continuous-${s}`)?.addEventListener('change',e=>{
