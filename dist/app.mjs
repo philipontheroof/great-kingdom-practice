@@ -116,7 +116,7 @@ function setPlaceMode(mode){
  placeMode=mode;
  if(mode!=='alternate'){
   cancel();controls.playing=false;
-  notice(mode==='place-red'?'🔴 빨간 성 배치: 판을 클릭하면 빨간 성을 배치하거나 제거합니다. (1회 배치 후 자동 복귀)':mode==='place-blue'?'🔵 파란 성 배치: 판을 클릭하면 파란 성을 배치하거나 제거합니다. (1회 배치 후 자동 복귀)':'⚪ 중립 성 배치: 판을 클릭하면 중립 성을 배치하거나 제거합니다. (1회 배치 후 자동 복귀)');
+  notice(mode==='place-red'?'🔴 빨간 성 배치 모드: 판을 클릭하면 빨간 성을 배치/제거합니다. 완료 후 [번갈아 착수]를 누르세요.':mode==='place-blue'?'🔵 파란 성 배치 모드: 판을 클릭하면 파란 성을 배치/제거합니다. 완료 후 [번갈아 착수]를 누르세요.':'⚪ 중립 성 배치 모드: 판을 클릭하면 중립 성을 배치/제거합니다. 완료 후 [번갈아 착수]를 누르세요.');
  }else{
   if(controls.anyAI())controls.playing=true;
   notice('');
@@ -131,60 +131,54 @@ async function handlePlacementClick(action){
  if(!stoneColor)return;
  cancel();
  controls.playing=false;
- const board=node.position.board.slice();
- board[action]=board[action]===stoneColor?0:stoneColor;
- node.position.board=board;
- if(node.parent===null){
-  doc.setup.board=board.slice();
-  const nIdx=board.indexOf(3);
-  doc.setup.neutral=nIdx>=0?[Math.floor(nIdx/9),nIdx%9]:null;
+ const curBoard=node.position.board.slice();
+ curBoard[action]=curBoard[action]===stoneColor?0:stoneColor;
+ const nIdx=curBoard.indexOf(3);
+ const neutral=nIdx>=0?[Math.floor(nIdx/9),nIdx%9]:null;
+ const side=node.position.side_to_move||'first';
+
+ if(doc.nodes.length>1){
+  await createGame({board:curBoard,side_to_move:side,neutral,komi:doc.setup.komi},{keepPlaceMode:true});
+  return;
  }
- try{
-  const next=await position(positionRequest(node));
-  node.position=next;
- }catch{
-  const f=facts(node.position);
-  node.position.territory=f.territory;
-  node.position.legal_actions=f.legal_actions;
-  const rScore=f.territory.filter(x=>x===1).length,bScore=f.territory.filter(x=>x===2).length;
-  node.position.score={red:rScore,blue:bScore,red_margin:rScore-bScore-node.position.komi};
-  node.position.result=f.tactical.status==='terminal'?{winner:f.tactical.winner,reason:'siege'}:null;
- }
+
+ doc.setup.board=curBoard;
+ doc.setup.neutral=neutral;
+ doc.setup.side_to_move=side;
+ node.position=await position({ruleset_version:doc.ruleset_version,setup:doc.setup,actions:[]});
  node.analysis=null;
  shown.delete(node.id);
  onceNode=null;
- setPlaceMode('alternate');
  save();
  render();
- schedule();
 }
 async function setTurnSide(side){
  const node=active();
  if(!node?.position)return;
+ const curSide=node.position.side_to_move;
+ if(curSide===side)return;
  cancel();
  controls.playing=false;
- node.position.side_to_move=side;
- node.position.previous_move_was_pass=false;
- if(node.parent===null){
-  doc.setup.side_to_move=side;
+ const curBoard=node.position.board.slice();
+ const nIdx=curBoard.indexOf(3);
+ const neutral=nIdx>=0?[Math.floor(nIdx/9),nIdx%9]:null;
+
+ if(doc.nodes.length>1){
+  await createGame({board:curBoard,side_to_move:side,neutral,komi:doc.setup.komi},{keepPlaceMode:true});
+  if(placeMode==='alternate'&&controls.anyAI())controls.playing=true;
+  if(placeMode==='alternate')schedule();
+  return;
  }
- try{
-  const next=await position(positionRequest(node));
-  node.position=next;
- }catch{
-  const f=facts(node.position);
-  node.position.legal_actions=f.legal_actions;
-  const rScore=f.territory.filter(x=>x===1).length,bScore=f.territory.filter(x=>x===2).length;
-  node.position.score={red:rScore,blue:bScore,red_margin:rScore-bScore-node.position.komi};
-  node.position.result=f.tactical.status==='terminal'?{winner:f.tactical.winner,reason:'siege'}:null;
- }
+
+ doc.setup.side_to_move=side;
+ node.position=await position({ruleset_version:doc.ruleset_version,setup:doc.setup,actions:[]});
  node.analysis=null;
  shown.delete(node.id);
  onceNode=null;
- setPlaceMode('alternate');
+ if(placeMode==='alternate'&&controls.anyAI())controls.playing=true;
  save();
  render();
- schedule();
+ if(placeMode==='alternate')schedule();
 }
 async function startAnalysis({ai=false,kind=ai?'ai':'once'}={}){
  if(!active()||moving||batching||!modelAvailable()||(ai&&!canAiPlay()))return;
@@ -458,7 +452,7 @@ async function setupBackend(){
 }
 async function rebuildStudy(imported){if(backend()==='host')return api('validate-study',studyForSave(imported));const nodes=[];for(const n of imported.nodes){const p=await position({ruleset_version:imported.ruleset_version,setup:imported.setup,actions:pathTo(imported,n.id)});nodes.push({...n,ply:n.parent===null?0:nodes.find(p=>p.id===n.parent).ply+1,position:p,analysis:null});}return {...imported,nodes};}
 async function loadStudy(value,{initializeModel=true,preserveCurrent=true}={}){const imported=importDocument(value);clearTimeout(saveTimer);if(preserveCurrent&&!saveNow())throw Error('현재 기보를 내보내기로 보관해 주세요.');cancel();controls.playing=false;const epoch=controls.epoch,rebuilt=await rebuildStudy(imported);if(epoch!==controls.epoch)return;doc={...rebuilt,storage_id:value.storage_id||crypto.randomUUID()};placeMode='alternate';onceNode=null;shown.clear();populateModels();render();save();if(initializeModel&&backend()==='local'&&localModel!==doc.model_id)await setupBackend();else if(initializeModel)schedule();}
-async function createGame(setup){cancel();controls.playing=false;const epoch=controls.epoch,p=await position({setup,actions:[]});if(epoch!==controls.epoch)return;clearTimeout(saveTimer);if(!saveNow())throw Error('현재 기보를 먼저 보관해 주세요.');const model=doc.model_id;doc={...newStudy(setup,p),storage_id:crypto.randomUUID(),model_id:model};doc.title=`${new Date().toLocaleDateString('ko-KR',{month:'long',day:'numeric'})}의 연습`;placeMode='alternate';onceNode=null;shown.clear();if(controls.anyAI())controls.playing=true;populateModels();save();render();if($('new-dialog'))$('new-dialog').close();schedule();}
+async function createGame(setup,{keepPlaceMode=false}={}){cancel();controls.playing=false;const epoch=controls.epoch,p=await position({ruleset_version:doc?.ruleset_version||'gk-v2.2',setup,actions:[]});if(epoch!==controls.epoch)return;clearTimeout(saveTimer);if(!saveNow())throw Error('현재 기보를 먼저 보관해 주세요.');const model=doc?.model_id||config?.models?.[0]?.id||null;doc={...newStudy(setup,p),storage_id:crypto.randomUUID(),model_id:model};doc.title=`${new Date().toLocaleDateString('ko-KR',{month:'long',day:'numeric'})}의 연습`;if(!keepPlaceMode)placeMode='alternate';onceNode=null;shown.clear();if(placeMode==='alternate'&&controls.anyAI())controls.playing=true;populateModels();save();render();if($('new-dialog'))$('new-dialog').close();if(placeMode==='alternate')schedule();}
 function showNew(){if(!$('recent-studies'))return;$('recent-studies').replaceChildren();for(const entry of library()){const b=document.createElement('button');b.type='button';b.textContent=`${entry.title||'이름 없는 연습'} · ${entry.nodes.length}개 국면`;b.addEventListener('click',()=>run(async()=>{await loadStudy(entry);$('new-dialog').close();}));$('recent-studies').append(b);}$('new-dialog').showModal();}
 async function batch(){if(batching){cancel();render();return;}if(!modelAvailable())return;
  cancel();controls.playing=false;
