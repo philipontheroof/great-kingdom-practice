@@ -104,3 +104,25 @@ main{padding-top:22px}.study-heading .eyebrow{display:none}.workspace{grid-templ
   .tree-tools{grid-template-columns:1fr}
   .board-stage{flex-direction:row}
 }
+
+/* Analysis Limits & Presets */
+.segmented-small{display:flex;padding:3px;background:#eef2f5;border-radius:8px;gap:2px;margin:8px 0}
+.segmented-small button{flex:1;padding:6px 4px;font-size:11px;font-weight:600;color:#697b8c;border-radius:6px;border:none;background:transparent;cursor:pointer;transition:all .15s}
+.segmented-small button.active{background:#ffffff;color:var(--navy);box-shadow:0 1px 3px rgba(0,0,0,0.1)}
+.budget-input-row{display:flex;align-items:center;border:1px solid #d4dce4;border-radius:8px;background:#fff;padding:6px 12px;margin-bottom:8px}
+.budget-input-row input{flex:1;border:none;background:transparent;font-size:15px;font-weight:700;color:var(--ink);min-width:0}
+.budget-input-row input:focus{outline:none}
+.budget-input-row .unit-label{font-size:12px;font-weight:600;color:#788896}
+.preset-buttons{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:8px}
+.preset-btn{padding:4px 8px;font-size:10px;font-weight:600;background:#f0f3f6;border:1px solid #dce2e8;border-radius:5px;color:#506575;cursor:pointer}
+.preset-btn:hover{background:#e3e9ef}
+.search-status-box{background:#f4f7f9;border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin-bottom:12px}
+.search-visits-line{display:flex;justify-content:space-between;align-items:center;margin-bottom:4px}
+.search-visits-line .label{font-size:11px;color:#6b7c8c;font-weight:600}
+.search-visits-line strong{font-size:15px;color:#225c52;font-weight:800}
+.play-budget-control{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:4px}
+.play-budget-control .sub-label{font-size:10px;color:#7a8a97}
+.budget-compact{display:inline-flex;align-items:center;border:1px solid #d4dce4;border-radius:6px;background:#fff;overflow:hidden}
+.budget-compact input{width:56px;border:none;padding:4px 6px;font-size:11px;text-align:right}
+.budget-compact input:focus{outline:none}
+.budget-compact select{border:none;border-left:1px solid #d4dce4;background:#f7f9fa;font-size:10px;padding:4px}

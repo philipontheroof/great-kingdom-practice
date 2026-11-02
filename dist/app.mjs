@@ -10,11 +10,12 @@ const staticOnly=document.documentElement?.dataset?.execution==='local';
 const $=id=>document.getElementById(id),controls=new PracticeControls(),shown=new Map(),SETTINGS='gk-practice-settings-v1';
 const SIDES=['first','second'];
 const settings={
- analysisLimit:{unit:'none',value:null},onceAutoShow:false,
+ analysisLimit:{unit:'seconds',value:2.0},
+ onceAutoShow:false,
  layers:{ownership:true,policy:true,win:true,margin:true,pv:true},
- play:{first:{unit:'visits',value:800},second:{unit:'visits',value:800}},
+ play:{first:{unit:'seconds',value:2.0},second:{unit:'seconds',value:2.0}},
  territory:true,numbers:true,
- batch:{scope:'branch',target:'missing',budget:{unit:'visits',value:160}},
+ batch:{scope:'branch',target:'missing',budget:{unit:'seconds',value:1.0}},
 };
 let lastPaint=0,doc=null,config=null,analyzing=false,analysisKind=null,moving=false,analysisController=null,preview=null,graphMode='win',saveTimer=null,local=null,localModel=null,batching=false,backendReady=true,onceNode=null;
 const active=()=>doc?.nodes.find(n=>n.id===doc.selected);
@@ -53,14 +54,14 @@ function capture(){for(const n of doc.nodes){const a=nodeAnalysis(n);if(a)shown.
 function loadSettings(){
  let saved=null;try{saved=JSON.parse(localStorage.getItem(SETTINGS)||'null');}catch{saved=null;}
  if(!saved||typeof saved!=='object'||Array.isArray(saved))return;
- settings.analysisLimit=normalizeBudget(saved.analysisLimit,{allowNone:true});
+ settings.analysisLimit=normalizeBudget(saved.analysisLimit,{allowNone:true,fallback:'seconds'});
  if(typeof saved.onceAutoShow==='boolean')settings.onceAutoShow=saved.onceAutoShow;
  for(const k of Object.keys(settings.layers))if(typeof saved.layers?.[k]==='boolean')settings.layers[k]=saved.layers[k];
- for(const s of SIDES)if(saved.play?.[s])settings.play[s]=normalizeBudget(saved.play[s]);
+ for(const s of SIDES)if(saved.play?.[s])settings.play[s]=normalizeBudget(saved.play[s],{fallback:'seconds'});
  for(const k of ['territory','numbers'])if(typeof saved[k]==='boolean')settings[k]=saved[k];
  if(['branch','all'].includes(saved.batch?.scope))settings.batch.scope=saved.batch.scope;
  if(['missing','all'].includes(saved.batch?.target))settings.batch.target=saved.batch.target;
- if(saved.batch?.budget)settings.batch.budget=normalizeBudget(saved.batch.budget);
+ if(saved.batch?.budget)settings.batch.budget=normalizeBudget(saved.batch.budget,{fallback:'seconds'});
  for(const s of SIDES)if(typeof saved.continuous?.[s]==='boolean')controls.continuous[s]=saved.continuous[s];
  controls.visualContinuous=saved.visualContinuous===true&&controls.anyContinuous();
 }
@@ -68,7 +69,11 @@ function saveSettings(){try{localStorage.setItem(SETTINGS,JSON.stringify({...set
 const plays=()=>SIDES.map(s=>({on:controls.aiSide[s],budget:settings.play[s]}));
 const floor=()=>analysisFloor(settings.analysisLimit.unit,plays());
 function enforceFloor(){const f=floor(),l=settings.analysisLimit;if(f!==null&&l.value<f){settings.analysisLimit={...l,value:f};return true;}return false;}
-function readBudget(prefix,current,{allowNone=false}={}){const u=$(`${prefix}-unit`);const unit=u?u.value:current.unit;const input=$(`${prefix}-value`);const value=unit===current.unit?(input?input.value:current.value):BUDGET_DEFAULT[unit];return normalizeBudget({unit,value},{allowNone});}
+function readBudget(prefix,current,{allowNone=false,fallback='seconds'}={}){
+ const u=$(`${prefix}-unit`);const unit=u?u.value:current.unit;
+ const input=$(`${prefix}-value`);const value=unit===current.unit?(input?input.value:current.value):BUDGET_DEFAULT[unit];
+ return normalizeBudget({unit,value},{allowNone,fallback});
+}
 function writeBudget(prefix,budget,min=null){
  const input=$(`${prefix}-value`),u=$(`${prefix}-unit`);if(u)u.value=budget.unit;
  if(!input)return;
@@ -89,7 +94,7 @@ async function streamHost(payload,onUpdate,signal){
  }finally{await reader.cancel().catch(()=>{});}
 }
 async function search(node,budget,{onUpdate=()=>{},signal}={}){
- const payload={...positionRequest(node),model_id:doc.model_id,visits:1600,seconds:2,continuous:true,...budgetPayload(budget)};
+ const payload={...positionRequest(node),model_id:doc.model_id,visits:1600,seconds:budget.unit==='seconds'?budget.value:2,continuous:true,...budgetPayload(budget)};
  if(backend()==='host')delete payload.max_seconds;
  const inner=new AbortController(),relay=()=>inner.abort();signal?.addEventListener('abort',relay,{once:true});
  let last=null,reached=false;
@@ -209,26 +214,96 @@ function setSwitch(id,on,{soft=false}={}){const el=$(id);if(!el)return;el.checke
 function renderSettings(){
  const node=active(),a=nodeAnalysis(node),side=node?.position?.side_to_move;
  const stateText=batching?'일괄 분석 중':analyzing?(analysisKind==='ai'?`AI ${sideName(side)} 착수 탐색 중`:analysisKind==='continuous'?`${sideName(side)} 턴 계속 분석 중`:'이번 턴 분석 중'):a?'분석 완료':'분석 전';
- if($('search-status'))$('search-status').textContent=`${stateText} · ${(a?.mcts.root_visits||0).toLocaleString()} visits${a?` · ${(a.cumulative_elapsed_seconds??a.mcts.elapsed_seconds).toFixed(1)}초`:''}`;
+ 
+ // 2.1 현재 분석 visit 수
+ const visitsNum=(a?.mcts?.root_visits||0);
+ if($('search-visits-num'))$('search-visits-num').textContent=`${visitsNum.toLocaleString()} visits`;
+ if($('search-status'))$('search-status').textContent=`${stateText} · ${visitsNum.toLocaleString()} visits · ${(a?.cumulative_elapsed_seconds??a?.mcts?.elapsed_seconds??0).toFixed(1)}초`;
+ 
+ // 2.2 이번 턴만 분석 시작 버튼 & 토글
  if($('analyze-button')){$('analyze-button').textContent=analyzing?'분석 중지':'이번 턴만 분석 시작';$('analyze-button').disabled=moving||batching||!modelAvailable()||Boolean(node?.position?.result&&!analyzing);}
  setSwitch('once-auto-show',settings.onceAutoShow);
+ 
+ // 2.3 이번 턴부터 계속 분석 토글 (빨강 / 파랑)
  for(const s of SIDES)setSwitch(`continuous-${s}`,controls.continuous[s]);
- const f=floor();writeBudget('analysis-limit',settings.analysisLimit,f);
+ 
+ // 2.4 최대 시간 or visit
  const l=settings.analysisLimit;
- if($('analysis-limit-hint'))$('analysis-limit-hint').textContent=l.unit==='none'?'중지하거나 수를 둘 때까지 누적합니다.':`${budgetLabel(l)}에 도달하면 멈춰요.${f!==null?` AI 착수 탐색량(${budgetLabel({unit:l.unit,value:f})}) 이상만 선택할 수 있어요.`:''}`;
+ const f=floor();
+ const tabs=$('analysis-limit-tabs');
+ if(tabs){
+   for(const btn of (tabs.children||[])){
+     btn.classList?.toggle?.('active', btn.dataset?.unit===l.unit);
+   }
+ }
+ const wrap=$('analysis-limit-input-wrap');
+ const presets=$('analysis-presets');
+ const input=$('analysis-limit-value');
+ const unitLabel=$('analysis-limit-unit-label');
+ if($('analysis-limit-unit'))$('analysis-limit-unit').value=l.unit;
+
+ if(l.unit==='none'){
+   if(wrap)wrap.hidden=true;
+   if(presets)presets.hidden=true;
+   if($('analysis-limit-hint'))$('analysis-limit-hint').textContent='수동으로 중지하거나 착수할 때까지 계속 탐색합니다.';
+ }else{
+   if(wrap)wrap.hidden=false;
+   if(presets)presets.hidden=false;
+   if(unitLabel)unitLabel.textContent=l.unit==='visits'?'visits':'초';
+   const range=BUDGET_RANGE[l.unit];
+   if(input){
+     input.disabled=false;
+     input.min=String(f!==null&&f>range.min?f:range.min);
+     input.max=String(range.max);
+     input.step=l.unit==='visits'?'1':'0.1';
+     if(document.activeElement!==input)input.value=String(l.value);
+   }
+   if(presets){
+     const list=l.unit==='visits'?[400,800,1600,3200,10000]:[0.5,1,2,5,10];
+     presets.replaceChildren();
+     for(const val of list){
+       const b=document.createElement('button');b.type='button';b.className='preset-btn';
+       b.textContent=l.unit==='visits'?`${val.toLocaleString()} visits`:`${val}초`;
+       b.addEventListener('click',()=>{
+         settings.analysisLimit={unit:l.unit,value:val};
+         if(enforceFloor())notice(`분석 탐색량을 ${budgetLabel(settings.analysisLimit)} 이상으로 맞췄어요.`);
+         saveSettings();render();
+       });
+       presets.append(b);
+     }
+   }
+   if($('analysis-limit-hint')){
+     $('analysis-limit-hint').textContent=l.unit==='seconds'?`한 수당 최대 ${l.value}초 동안 탐색 후 정지합니다.${f!==null?` (AI 착수 설정 ${f}초 이상으로 제한)`:''}`:`한 수당 최대 ${l.value.toLocaleString()} visits에 도달하면 정지합니다.${f!==null?` (AI 착수 설정 ${f.toLocaleString()} visits 이상으로 제한)`:''}`;
+   }
+ }
+
+ // 3. 시각화
  const once=onceNode===node?.id,hasResult=Boolean(a)||analyzing;
- if($('visual-once')){$('visual-once').classList.toggle('active',once);$('visual-once').setAttribute('aria-pressed',String(once));$('visual-once').classList.toggle('soft-disabled',!hasResult&&!once);$('visual-once').textContent=once?'이번 턴 보는 중':'이번 턴만 보기';}
+ if($('visual-once')){$('visual-once').classList.toggle('active',once);$('visual-once').setAttribute('aria-pressed',String(once));$('visual-once').classList.toggle('soft-disabled',!hasResult&&!once);$('visual-once').textContent=once?'이번 턴 실시간 보는 중':'이번 턴만 실시간 보기';}
  setSwitch('visual-continuous',controls.visualContinuous,{soft:!controls.anyContinuous()});
  if($('visual-hint'))$('visual-hint').textContent=!controls.anyContinuous()?'계속 보기는 계속 분석(빨강/파랑 턴)이 켜져 있어야 해요.':!hasResult&&!once?'이번 턴은 아직 분석 전이에요. 누르면 분석부터 시작할지 물어봐요.':controls.visualContinuous?'모든 턴의 분석을 실시간으로 보여줘요.':once?'이 국면에서만 실시간으로 보여줘요.':'';
  setSwitch('ownership-toggle',settings.layers.ownership);for(const k of ['policy','win','margin','pv'])setSwitch(`layer-${k}`,settings.layers[k]);
- for(const s of SIDES){setSwitch(`play-${s}`,controls.aiSide[s]);writeBudget(`play-${s}`,settings.play[s]);}
+
+ // 4. 착수
+ for(const s of SIDES){
+   setSwitch(`play-${s}`,controls.aiSide[s]);
+   const pVal=$(`play-${s}-value`),pUnit=$(`play-${s}-unit`);
+   if(pUnit)pUnit.value=settings.play[s].unit;
+   if(pVal&&document.activeElement!==pVal)pVal.value=String(settings.play[s].value);
+ }
  if($('ai-resume')){$('ai-resume').hidden=!(controls.anyAI()&&!controls.playing)||Boolean(node?.position?.result);$('ai-resume').disabled=!modelAvailable()||batching;}
  const who=SIDES.filter(s=>controls.aiSide[s]).map(sideName).join('·');
  if($('play-status'))$('play-status').textContent=!who?'AI 착수 꺼짐 · 양쪽을 직접 둡니다':controls.playing?`AI가 ${who}을(를) 둡니다`:`AI ${who} 착수 일시정지 · 수순 이동 중`;
+
+ // 2. 일반 시각화
  setSwitch('territory-toggle',settings.territory);setSwitch('numbers-toggle',settings.numbers);
+
+ // 3. 브랜칭 트리 일괄 분석
  if($('batch-scope')&&!$('batch-scope').value)$('batch-scope').value=settings.batch.scope;
  if($('batch-target')&&!$('batch-target').value)$('batch-target').value=settings.batch.target;
- writeBudget('batch',settings.batch.budget);
+ const bVal=$('batch-value'),bUnit=$('batch-unit');
+ if(bUnit)bUnit.value=settings.batch.budget.unit;
+ if(bVal&&document.activeElement!==bVal)bVal.value=String(settings.batch.budget.value);
  if($('batch-start')){$('batch-start').textContent=batching?'일괄 분석 중지':settings.batch.target==='all'?'한번에 다시 분석':'미분석 국면 분석';$('batch-start').disabled=!modelAvailable()||moving;}
 }
 function renderMemos(){
@@ -299,8 +374,35 @@ for(const s of SIDES)$(`continuous-${s}`)?.addEventListener('change',e=>{
  if(!controls.continuous[s]&&analysisKind==='continuous'&&p?.side_to_move===s){cancel();render();return;}
  render();if(controls.continuous[s]&&p?.side_to_move===s&&!analyzing&&!batching&&!moving)schedule();
 });
-$('analysis-limit-unit')?.addEventListener('change',()=>{settings.analysisLimit=readBudget('analysis-limit',settings.analysisLimit,{allowNone:true});enforceFloor();saveSettings();render();});
-$('analysis-limit-value')?.addEventListener('change',()=>{const before=Number($('analysis-limit-value').value);settings.analysisLimit=readBudget('analysis-limit',settings.analysisLimit,{allowNone:true});if(enforceFloor()||settings.analysisLimit.value!==before)notice(`분석 최대 탐색량을 ${budgetLabel(settings.analysisLimit)}로 맞췄어요.`);saveSettings();if($('analysis-limit-value'))$('analysis-limit-value').value=String(settings.analysisLimit.value??'');render();});
+
+// 2.4 최대 시간 or visit 탭 전환 및 숫자 입력
+$('analysis-limit-tabs')?.addEventListener('click',e=>{
+ const btn=e.target?.closest?.('button[data-unit]');
+ if(!btn)return;
+ const unit=btn.dataset.unit;
+ const current=settings.analysisLimit;
+ let val=current.value;
+ if(unit==='none')val=null;
+ else if(unit==='seconds'&&(current.unit!=='seconds'||!val))val=2.0;
+ else if(unit==='visits'&&(current.unit!=='visits'||!val))val=1600;
+ settings.analysisLimit=normalizeBudget({unit,value:val},{allowNone:true,fallback:'seconds'});
+ if(enforceFloor())notice(`AI 착수 탐색량 이하로 둘 수 없어 ${budgetLabel(settings.analysisLimit)}로 조정되었습니다.`);
+ saveSettings();
+ render();
+});
+$('analysis-limit-value')?.addEventListener('change',()=>{
+ const val=Number($('analysis-limit-value').value);
+ settings.analysisLimit=normalizeBudget({unit:settings.analysisLimit.unit,value:val},{allowNone:true,fallback:'seconds'});
+ if(enforceFloor())notice(`분석 최대 탐색량을 ${budgetLabel(settings.analysisLimit)} 이상으로 맞췄어요.`);
+ saveSettings();
+ render();
+});
+$('analysis-limit-unit')?.addEventListener('change',()=>{
+ settings.analysisLimit=readBudget('analysis-limit',settings.analysisLimit,{allowNone:true,fallback:'seconds'});
+ enforceFloor();saveSettings();render();
+});
+
+// 3. 시각화
 $('visual-once')?.addEventListener('click',()=>run(async()=>{
  const n=active();if(onceNode===n.id){onceNode=null;render();return;}
  if(nodeAnalysis(n)||analyzing){onceNode=n.id;render();return;}
@@ -314,24 +416,46 @@ $('visual-continuous')?.addEventListener('click',e=>{
  run(async()=>{if(!await ask('계속 분석이 꺼져 있어요','빨강·파랑 턴 계속 분석을 켜고, 계속 실시간 보기도 켤까요?','둘 다 켜기')){render();return;}controls.continuous.first=controls.continuous.second=true;controls.visualContinuous=true;saveSettings();render();if(!analyzing&&!batching&&!moving)schedule();});
 });
 for(const [id,key] of [['ownership-toggle','ownership'],['layer-policy','policy'],['layer-win','win'],['layer-margin','margin'],['layer-pv','pv']])$(id)?.addEventListener('change',e=>{settings.layers[key]=e.target.checked;if(!e.target.checked&&key==='pv')preview=null;saveSettings();render();});
+
+// 4. 착수
 for(const s of SIDES){
- $(`play-${s}`)?.addEventListener('change',e=>{cancel();controls.aiSide[s]=e.target.checked;controls.playing=controls.anyAI();if(e.target.checked&&enforceFloor())notice(`분석 최대 탐색량을 ${sideName(s)} 착수 탐색량 ${budgetLabel(settings.analysisLimit)}로 올렸어요.`);saveSettings();render();schedule();});
- const budgetChanged=()=>{settings.play[s]=readBudget(`play-${s}`,settings.play[s]);if(enforceFloor())notice(`분석 최대 탐색량을 ${budgetLabel(settings.analysisLimit)}로 올렸어요.`);saveSettings();if($(`play-${s}-value`))$(`play-${s}-value`).value=String(settings.play[s].value);render();};
+ $(`play-${s}`)?.addEventListener('change',e=>{
+   cancel();controls.aiSide[s]=e.target.checked;controls.playing=controls.anyAI();
+   if(e.target.checked&&enforceFloor())notice(`분석 제한을 ${sideName(s)} 착수 탐색량(${budgetLabel(settings.analysisLimit)}) 이상으로 올렸어요.`);
+   saveSettings();render();schedule();
+ });
+ const budgetChanged=()=>{
+   settings.play[s]=readBudget(`play-${s}`,settings.play[s],{fallback:'seconds'});
+   if(enforceFloor())notice(`분석 제한을 ${sideName(s)} 착수 탐색량(${budgetLabel(settings.analysisLimit)}) 이상으로 올렸어요.`);
+   saveSettings();render();
+ };
  $(`play-${s}-unit`)?.addEventListener('change',budgetChanged);$(`play-${s}-value`)?.addEventListener('change',budgetChanged);
 }
 $('ai-resume')?.addEventListener('click',()=>{cancel();controls.playing=true;render();schedule();});
+$('ai-seconds')?.addEventListener('change',()=>{
+ const val=Number($('ai-seconds').value);
+ for(const s of SIDES)settings.play[s]={unit:'seconds',value:val};
+ saveSettings();render();
+});
+
+// 2. 일반 시각화
 $('territory-toggle')?.addEventListener('change',e=>{settings.territory=e.target.checked;saveSettings();render();});
 $('numbers-toggle')?.addEventListener('change',e=>{settings.numbers=e.target.checked;saveSettings();render();});
+
+// 3. 브랜칭 트리 일괄 분석
 $('batch-scope')?.addEventListener('change',()=>{settings.batch.scope=$('batch-scope').value==='all'?'all':'branch';saveSettings();render();});
 $('batch-target')?.addEventListener('change',()=>{settings.batch.target=$('batch-target').value==='all'?'all':'missing';saveSettings();render();});
-const batchBudgetChanged=()=>{settings.batch.budget=readBudget('batch',settings.batch.budget);saveSettings();if($('batch-value'))$('batch-value').value=String(settings.batch.budget.value);render();};
+const batchBudgetChanged=()=>{settings.batch.budget=readBudget('batch',settings.batch.budget,{fallback:'seconds'});saveSettings();render();};
 $('batch-unit')?.addEventListener('change',batchBudgetChanged);$('batch-value')?.addEventListener('change',batchBudgetChanged);
+$('batch-start')?.addEventListener('click',()=>run(batch));
+
+// 기타
 $('backend')?.addEventListener('change',()=>run(setupBackend));
 $('model-select')?.addEventListener('change',()=>{cancel();controls.playing=false;doc.model_id=$('model-select').value||null;populateModels();save();render();run(setupBackend);});
 $('first')?.addEventListener('click',()=>run(()=>selectNode(doc.nodes[0].id)));$('previous')?.addEventListener('click',()=>{if(active().parent)run(()=>selectNode(active().parent));});$('next')?.addEventListener('click',()=>{const n=doc.nodes.find(n=>n.parent===doc.selected);if(n)run(()=>selectNode(n.id));});$('last')?.addEventListener('click',()=>{const n=lineThrough(doc,doc.selected).at(-1);run(()=>selectNode(n.id));});$('pass')?.addEventListener('click',()=>run(()=>place(81)));
 $('timeline')?.addEventListener('click',e=>{const t=e.target?.closest?.('[data-node]');if(t)run(()=>selectNode(t.dataset.node));});$('timeline')?.addEventListener('keydown',e=>{if(['Enter',' '].includes(e.key)){const t=e.target?.closest?.('[data-node]');if(t){e.preventDefault();run(()=>selectNode(t.dataset.node));}}});
 for(const [id,value]of [['graph-win','win'],['graph-score','score']])$(id)?.addEventListener('click',()=>{graphMode=value;$('graph-win')?.classList.toggle('active',value==='win');$('graph-score')?.classList.toggle('active',value==='score');renderTimeline();});
-$('batch-start')?.addEventListener('click',()=>run(batch));$('pv-import')?.addEventListener('click',()=>run(importPV));$('preview-exit')?.addEventListener('click',()=>{preview=null;renderBoard();});
+$('pv-import')?.addEventListener('click',()=>run(importPV));$('preview-exit')?.addEventListener('click',()=>{preview=null;renderBoard();});
 $('notes')?.addEventListener('input',()=>{const had=Boolean((active().notes||'').trim());active().notes=$('notes').value;save();if(had!==Boolean(active().notes.trim()))renderTimeline();else renderMemos();});$('title')?.addEventListener('input',()=>{doc.title=$('title').value;save();});
 $('new-button')?.addEventListener('click',()=>run(showNew));$('new-close')?.addEventListener('click',()=>$('new-dialog')?.close());$('neutral-setup')?.addEventListener('change',()=>{$('neutral-coordinates').hidden=$('neutral-setup').value!=='custom';});
 $('new-form')?.addEventListener('submit',e=>{e.preventDefault();run(()=>createGame({neutral:$('neutral-setup').value==='none'?null:$('neutral-setup').value==='center'?[4,4]:[Number($('neutral-row').value)-1,Number($('neutral-col').value)-1],komi:Number($('komi').value)}));});

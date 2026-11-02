@@ -1,6 +1,6 @@
 <!doctype html>
 <html data-execution="local" lang="ko">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#172e45"><title>Great Kingdom · 연습실</title><link rel="icon" href="data:,"><link rel="stylesheet" href="./style.css?v=3"><script type="module" src="./app.mjs?v=3"></script></head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#172e45"><title>Great Kingdom · 연습실</title><link rel="icon" href="data:,"><link rel="stylesheet" href="./style.css?v=4"><script type="module" src="./app.mjs?v=4"></script></head>
 <body>
   <main>
     <div class="study-toolbar"><div class="study-heading"><p class="eyebrow">PRACTICE WORKSPACE</p><input id="title" aria-label="기보 이름" maxlength="120" value="새로운 연습"><span id="save-state" class="saved">기기에 저장</span></div><div class="toolbar-actions"><button id="import-button" class="quiet-button">불러오기</button><button id="export-button" class="quiet-button">내보내기</button><button id="new-button" class="primary-button"><span>＋</span> 새 대국</button><input id="import-file" type="file" accept=".json,application/json" hidden></div></div>
@@ -32,34 +32,77 @@
         <details class="settings-group" open>
           <summary><span class="group-no">1</span>모델</summary>
           <section class="settings-sub">
-            <h3>모델 선택</h3>
-            <select id="model-select" aria-label="사용 모델"><option>모델 확인 중</option></select>
+            <h3>1. 모델 선택</h3>
+            <select id="model-select" aria-label="사용 모델"><option>모델 목록 불러오는 중…</option></select>
+            <select id="backend" hidden aria-hidden="true"><option value="local">이 기기 · WebGPU / WASM</option><option value="host">Mac</option></select>
             <small id="model-detail" class="hint">모델을 불러오고 있어요</small>
             <small id="runtime-note" class="hint">이 기기에서 계산 준비 중</small>
           </section>
           <section class="settings-sub">
-            <h3>분석</h3>
-            <div id="search-status" class="search-status" role="status">분석 전 · 0 visits</div>
+            <h3>2. 분석</h3>
+            <div class="search-status-box">
+              <div class="search-visits-line">
+                <span class="label">현재 분석 visit 수</span>
+                <strong id="search-visits-num">0 visits</strong>
+              </div>
+              <div id="search-status" class="search-status" role="status">대기 중 · 0.0초</div>
+            </div>
             <button id="analyze-button" class="primary-button full-width">이번 턴만 분석 시작</button>
             <label class="switch-row nested"><input id="once-auto-show" type="checkbox" role="switch"><span>누르면 이번 턴 시각화도 켜기</span></label>
             <div class="field-label">이번 턴부터 계속 분석</div>
             <div class="pair"><label class="switch-row side-red"><input id="continuous-first" type="checkbox" role="switch"><span>빨강 턴</span></label><label class="switch-row side-blue"><input id="continuous-second" type="checkbox" role="switch"><span>파랑 턴</span></label></div>
-            <div class="field-label">최대 탐색량</div>
-            <div class="budget"><input id="analysis-limit-value" type="number" inputmode="decimal" aria-label="분석 최대 탐색량"><select id="analysis-limit-unit" aria-label="분석 제한 단위"><option value="visits">visits</option><option value="seconds">초</option><option value="none">무제한</option></select></div>
+            <div class="field-label">최대 시간 or visit</div>
+            <div class="segmented-small" id="analysis-limit-tabs">
+              <button type="button" data-unit="seconds" class="active">⏱ 시간(초)</button>
+              <button type="button" data-unit="visits">🎯 visit 수</button>
+              <button type="button" data-unit="none">♾️ 무제한</button>
+            </div>
+            <div class="budget-input-row" id="analysis-limit-input-wrap">
+              <input id="analysis-limit-value" type="number" inputmode="decimal" aria-label="분석 최대 탐색량" value="2.0">
+              <span id="analysis-limit-unit-label" class="unit-label">초</span>
+              <select id="analysis-limit-unit" hidden><option value="seconds">초</option><option value="visits">visits</option><option value="none">무제한</option></select>
+            </div>
+            <div class="preset-buttons" id="analysis-presets">
+              <button type="button" class="preset-btn" data-val="0.5">0.5초</button>
+              <button type="button" class="preset-btn" data-val="1">1초</button>
+              <button type="button" class="preset-btn" data-val="2">2초</button>
+              <button type="button" class="preset-btn" data-val="5">5초</button>
+              <button type="button" class="preset-btn" data-val="10">10초</button>
+            </div>
             <small id="analysis-limit-hint" class="hint"></small>
           </section>
           <section class="settings-sub">
-            <h3>시각화</h3>
-            <div class="pair"><button id="visual-once" class="quiet-button" aria-pressed="false">이번 턴만 보기</button><label class="switch-row" id="visual-continuous-row"><input id="visual-continuous" type="checkbox" role="switch"><span>계속 실시간 보기</span></label></div>
+            <h3>3. 시각화</h3>
+            <div class="pair"><button id="visual-once" class="quiet-button" aria-pressed="false">이번 턴만 실시간 보기</button><label class="switch-row" id="visual-continuous-row"><input id="visual-continuous" type="checkbox" role="switch"><span>계속 실시간 보기</span></label></div>
             <small id="visual-hint" class="hint"></small>
-            <div class="field-label">표시할 항목</div>
-            <div class="chip-toggles"><label><input id="ownership-toggle" type="checkbox"><span>예상 영역</span></label><label><input id="layer-policy" type="checkbox"><span>착수 확률</span></label><label><input id="layer-win" type="checkbox"><span>승률</span></label><label><input id="layer-margin" type="checkbox"><span>예상 집차이</span></label><label><input id="layer-pv" type="checkbox"><span>예상 수순</span></label></div>
+            <div class="field-label">어떤 시각화를 켤건지 토글</div>
+            <div class="chip-toggles"><label><input id="ownership-toggle" type="checkbox"><span>예상 영역</span></label><label><input id="layer-policy" type="checkbox"><span>착수 확률</span></label><label><input id="layer-win" type="checkbox"><span>승률 (세로 바)</span></label><label><input id="layer-margin" type="checkbox"><span>예상 집차이</span></label><label><input id="layer-pv" type="checkbox"><span>예상 수순</span></label></div>
           </section>
           <section class="settings-sub">
-            <h3>착수</h3>
-            <div class="play-row side-red"><label class="switch-row"><input id="play-first" type="checkbox" role="switch"><span>AI가 빨강 착수</span></label><div class="budget"><input id="play-first-value" type="number" inputmode="decimal" aria-label="빨강 착수 탐색량"><select id="play-first-unit" aria-label="빨강 착수 단위"><option value="visits">visits</option><option value="seconds">초</option></select></div></div>
-            <div class="play-row side-blue"><label class="switch-row"><input id="play-second" type="checkbox" role="switch"><span>AI가 파랑 착수</span></label><div class="budget"><input id="play-second-value" type="number" inputmode="decimal" aria-label="파랑 착수 탐색량"><select id="play-second-unit" aria-label="파랑 착수 단위"><option value="visits">visits</option><option value="seconds">초</option></select></div></div>
+            <h3>4. 착수</h3>
+            <div class="play-row side-red">
+              <label class="switch-row"><input id="play-first" type="checkbox" role="switch"><span>AI가 빨강 착수</span></label>
+              <div class="play-budget-control">
+                <span class="sub-label">탐색량:</span>
+                <div class="budget-compact">
+                  <input id="play-first-value" type="number" inputmode="decimal" aria-label="빨강 착수 탐색량" value="2.0">
+                  <select id="play-first-unit" aria-label="빨강 착수 단위"><option value="seconds">초</option><option value="visits">visits</option></select>
+                </div>
+              </div>
+            </div>
+            <div class="play-row side-blue">
+              <label class="switch-row"><input id="play-second" type="checkbox" role="switch"><span>AI가 파랑 착수</span></label>
+              <div class="play-budget-control">
+                <span class="sub-label">탐색량:</span>
+                <div class="budget-compact">
+                  <input id="play-second-value" type="number" inputmode="decimal" aria-label="파랑 착수 탐색량" value="2.0">
+                  <select id="play-second-unit" aria-label="파랑 착수 단위"><option value="seconds">초</option><option value="visits">visits</option></select>
+                </div>
+              </div>
+            </div>
             <div class="play-status"><span id="play-status" class="hint">AI 착수 꺼짐 · 양쪽을 직접 둡니다</span><button id="ai-resume" class="text-button" hidden>AI 착수 재개</button></div>
+            <select id="ai-seconds" hidden><option value="1">1초</option><option value="2">2초</option><option value="5">5초</option><option value="10">10초</option></select>
+            <select id="ai-color" hidden><option value="none">none</option></select>
           </section>
         </details>
         <details class="settings-group" open>
@@ -77,7 +120,14 @@
         <div class="tree-tools">
           <section class="tree-tool">
             <h3>한번에 다시 분석</h3>
-            <div class="batch-controls"><label>범위<select id="batch-scope"><option value="branch">선택 가지</option><option value="all">모든 가지</option></select></label><label>대상<select id="batch-target"><option value="missing">미분석 국면만</option><option value="all">분석된 국면도 다시</option></select></label><label>국면당 탐색량<span class="budget"><input id="batch-value" type="number" inputmode="decimal" aria-label="국면당 탐색량"><select id="batch-unit" aria-label="일괄 분석 단위"><option value="visits">visits</option><option value="seconds">초</option></select></span></label><button id="batch-start" class="quiet-button">한번에 분석</button></div>
+            <div class="batch-controls">
+              <label>범위<select id="batch-scope"><option value="branch">선택 가지</option><option value="all">모든 가지</option></select></label>
+              <label>대상<select id="batch-target"><option value="missing">미분석 국면만</option><option value="all">분석된 국면도 다시</option></select></label>
+              <label>국면당 탐색량<span class="budget"><input id="batch-value" type="number" inputmode="decimal" aria-label="국면당 탐색량" value="1.0"><select id="batch-unit" aria-label="일괄 분석 단위"><option value="seconds">초</option><option value="visits">visits</option></select></span></label>
+              <button id="batch-start" class="quiet-button">한번에 분석</button>
+              <input id="batch-visits" type="hidden" value="160">
+              <input id="batch-seconds" type="hidden" value="1">
+            </div>
             <span id="batch-status" class="muted"></span>
           </section>
           <section class="tree-tool">
