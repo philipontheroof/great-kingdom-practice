@@ -251,9 +251,10 @@ function populateModels(){
  const select=$('model-select');if(!select)return;
  select.replaceChildren();for(const m of (config?.models||[])){const o=new Option(m.label,m.id);select.append(o);}
  if(!config?.models?.length)select.append(new Option('연결된 모델 없음',''));
- if(doc.model_id&&!config?.models?.some(m=>m.id===doc.model_id))select.append(new Option('저장된 모델 · 사용 불가',doc.model_id));
- select.value=doc.model_id||'';
- if($('model-detail'))$('model-detail').textContent=doc.model_id?`선택 모델 SHA ${doc.model_id.slice(0,16)} · 기보 중 자동 교체 없음`:'모델을 연결해 주세요.';
+ const modelId=doc?.model_id||config?.models?.[0]?.id||'';
+ if(doc?.model_id&&!config?.models?.some(m=>m.id===doc.model_id))select.append(new Option('저장된 모델 · 사용 불가',doc.model_id));
+ select.value=modelId;
+ if($('model-detail'))$('model-detail').textContent=modelId?`선택 모델 SHA ${modelId.slice(0,16)} · 기보 중 자동 교체 없음`:'모델을 연결해 주세요.';
 }
 async function setupBackend(){
  cancel();controls.playing=false;backendReady=false;const requested=backend(),model=doc.model_id;render();
@@ -341,6 +342,7 @@ window.addEventListener('pagehide',()=>{saveNow();cancel();});document.addEventL
 run(async()=>{
  loadSettings();
  config=staticOnly?await loadStaticConfig():await api('config');
+ populateModels();
  if($('backend')){
   if(staticOnly){
    $('backend').replaceChildren(new Option('이 기기 · WebGPU / WASM','local'));
