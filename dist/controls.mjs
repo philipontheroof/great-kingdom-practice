@@ -11,7 +11,7 @@ export class PracticeControls {
    this.aiSide={first:false,second:false};
    this._aiString=null;
    this._autoAnalysis=false;
-   this.playing=false;
+   this.playing=true;
    this.epoch=0;
  }
  get autoAnalysis(){return Boolean(this.continuous.first||this.continuous.second||this._autoAnalysis);}
@@ -38,7 +38,7 @@ export class PracticeControls {
  anyContinuous(){return Boolean(this.continuous.first||this.continuous.second);}
  anyAI(){return Boolean(this.aiSide.first||this.aiSide.second||(this._aiString&&this._aiString!=='none'));}
  aiTurn(p){
-   if(!this.playing||p.result)return false;
+   if(!p||p.result)return false;
    if(this._aiString!==null)return this._aiString==='both'||this._aiString===p.side_to_move;
    return Boolean(this.aiSide[p.side_to_move]);
  }

@@ -10,7 +10,7 @@ export function tileLayers(position,index,prediction=null) {
   return {castle,territory,predictedOwner,confidence};
 }
 
-export function boardSvg(position,{actions=[],lastAction=null,analysis=null,showTerritory=true,showOwnership=false,showCandidates=false,showNumbers=true}={}) {
+export function boardSvg(position,{actions=[],lastAction=null,analysis=null,showTerritory=true,showOwnership=false,showCandidates=false,showPV=false,showNumbers=true}={}) {
   const nums=new Map();
   actions.forEach((a,i)=>{
     if(a===null||a===81)return;
@@ -21,6 +21,15 @@ export function boardSvg(position,{actions=[],lastAction=null,analysis=null,show
   const lastCell=(lastAction===null||lastAction===81)?null:(lastAction>=400?null:(lastAction>=100?(lastAction%100):lastAction));
   const candidates=(analysis?.mcts?.candidates||[]).filter(c=>c.action!==81).slice(0,8);
   const ranks=new Map(candidates.map((c,i)=>[c.action,{...c,rank:i+1}]));
+  const pvMap=new Map();
+  if(showPV&&analysis?.mcts?.principal_variation?.length){
+    analysis.mcts.principal_variation.forEach((action,i)=>{
+      if(action!==null&&action<81&&!pvMap.has(action)){
+        const side=(analysis.perspective==='first')===(i%2===0)?'first':'second';
+        pvMap.set(action,{step:i+1,side});
+      }
+    });
+  }
   const legal=new Set(position.legal_actions||[]),marks=new Set(position.terminal_marks||[]);
   let svg=`<svg class="kingdom-board" viewBox="0 0 602 602" role="group" aria-label="그레이트 킹덤 9×9 판">
     <defs>
@@ -52,6 +61,10 @@ export function boardSvg(position,{actions=[],lastAction=null,analysis=null,show
       if(lastCell===i)svg+=`<rect data-last="${i}" x="${x-27}" y="${y-27}" width="54" height="54" rx="6" fill="none" stroke="#172f48" stroke-width="2.5"/>`;
     } else if(showCandidates&&rank) {
       svg+=`<circle cx="${x}" cy="${y-(tile.predictedOwner?5:0)}" r="20" class="candidate-dot ${rank.rank===1?'best':''}"/><text class="candidate-number" x="${x}" y="${y-(tile.predictedOwner?5:0)}">${(rank.visit_share*100).toFixed(1)}%</text>`;
+    }
+    if(pvMap.has(i)) {
+      const pv=pvMap.get(i);
+      svg+=`<g class="pv-marker" aria-label="예상 ${pv.step}수"><circle cx="${x-13}" cy="${y-13}" r="10" fill="url(#${pv.side==='first'?'red':'blue'}Stone)" stroke="#ffffff" stroke-width="1.5" filter="url(#castleShadow)"/><text class="pv-step-number" x="${x-13}" y="${y-10}" text-anchor="middle" fill="#ffffff" font-size="10" font-weight="800">${pv.step}</text></g>`;
     }
     svg+='</g>';
   }

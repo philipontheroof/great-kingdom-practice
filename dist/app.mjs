@@ -12,13 +12,23 @@ const $=id=>document.getElementById(id),controls=new PracticeControls(),shown=ne
 const SIDES=['first','second'];
 const settings={
  analysisLimit:{unit:'seconds',value:2.0},
+ analysisPinned:false,
  onceAutoShow:true,
  layers:{ownership:true,policy:true,win:true,margin:true,pv:true},
+ pins:{ownership:true,policy:true,win:true,margin:true,pv:true,territory:true,numbers:true},
  play:{first:{unit:'seconds',value:2.0},second:{unit:'seconds',value:2.0}},
  territory:true,numbers:true,
  batch:{scope:'branch',target:'missing',budget:{unit:'seconds',value:1.0}},
 };
 let lastPaint=0,doc=null,config=null,analyzing=false,analysisKind=null,moving=false,analysisController=null,preview=null,graphMode='win',saveTimer=null,local=null,localModel=null,batching=false,backendReady=true,onceNode=null,placeMode='alternate';
+const isLeafNode=(d,id)=>!d?.nodes?.some?.(n=>n.parent===id);
+function applyPinsOnNavigation(){
+ for(const k of Object.keys(settings.layers)){
+  if(!settings.pins[k])settings.layers[k]=false;
+ }
+ if(!settings.pins.territory)settings.territory=false;
+ if(!settings.pins.numbers)settings.numbers=false;
+}
 const canAiPlay=()=>placeMode==='alternate';
 const active=()=>doc?.nodes.find(n=>n.id===doc.selected);
 const backend=()=>$('backend')?.value||(staticOnly?'local':'host');
@@ -57,8 +67,12 @@ function loadSettings(){
  let saved=null;try{saved=JSON.parse(localStorage.getItem(SETTINGS)||'null');}catch{saved=null;}
  if(!saved||typeof saved!=='object'||Array.isArray(saved))return;
  settings.analysisLimit=normalizeBudget(saved.analysisLimit,{allowNone:true,fallback:'seconds'});
+ if(typeof saved.analysisPinned==='boolean')settings.analysisPinned=saved.analysisPinned;
  if(typeof saved.onceAutoShow==='boolean')settings.onceAutoShow=saved.onceAutoShow;
  for(const k of Object.keys(settings.layers))if(typeof saved.layers?.[k]==='boolean')settings.layers[k]=saved.layers[k];
+ if(saved.pins&&typeof saved.pins==='object'){
+  for(const k of Object.keys(settings.pins))if(typeof saved.pins[k]==='boolean')settings.pins[k]=saved.pins[k];
+ }
  for(const s of SIDES)if(saved.play?.[s])settings.play[s]=normalizeBudget(saved.play[s],{fallback:'seconds'});
  for(const k of ['territory','numbers'])if(typeof saved[k]==='boolean')settings[k]=saved[k];
  if(['branch','all'].includes(saved.batch?.scope))settings.batch.scope=saved.batch.scope;
@@ -214,19 +228,35 @@ async function startAnalysis({ai=false,kind=ai?'ai':'once'}={}){
  if(!valid())return;acceptResult(result,node,model,execution);notice('');
  }catch(error){if(error.name!=='AbortError'&&valid())notice(error.message,true);return;}
  finally{analyzing=false;analysisKind=null;analysisController=null;if(valid())render();}
- if(ai&&valid()&&controls.aiTurn(node.position)&&result?.recommended_action!==null&&result?.recommended_action!==undefined){await place(result.recommended_action,true);}
+ if(ai&&valid()&&isLeafNode(doc,node.id)&&controls.aiTurn(node.position)&&result?.recommended_action!==null&&result?.recommended_action!==undefined){await place(result.recommended_action,true);}
 }
-function schedule(){const n=active();if(!n)return;if(n.position.result){render();return;}
+function schedule(){
+ const n=active();if(!n)return;if(n.position.result){render();return;}
  if(!canAiPlay())return;
- if(controls.aiTurn(n.position))queueMicrotask(()=>run(()=>startAnalysis({ai:true})));
- else if(controls.continuous[n.position.side_to_move]&&!budgetReached(settings.analysisLimit,nodeAnalysis(n)))queueMicrotask(()=>run(()=>startAnalysis({kind:'continuous'})));}
-async function selectNode(id){cancel();controls.playing=false;placeMode='alternate';if(onceNode!==id)onceNode=null;doc.selected=id;save();render();schedule();}
+ const isLeaf=isLeafNode(doc,n.id);
+ if(isLeaf&&controls.aiTurn(n.position)){
+  queueMicrotask(()=>run(()=>startAnalysis({ai:true})));
+ }else if(settings.analysisPinned){
+  queueMicrotask(()=>run(()=>startAnalysis({kind:'pinned'})));
+ }else if(controls.continuous[n.position.side_to_move]&&!budgetReached(settings.analysisLimit,nodeAnalysis(n))){
+  queueMicrotask(()=>run(()=>startAnalysis({kind:'continuous'})));
+ }
+}
+async function selectNode(id){
+ cancel();
+ placeMode='alternate';
+ applyPinsOnNavigation();
+ if(onceNode!==id)onceNode=null;
+ doc.selected=id;
+ save();
+ render();
+ schedule();
+}
 async function place(action,fromAI=false){
  const node=active();if(moving||preview||node.position.result)return;
  if(!fromAI&&controls.aiTurn(node.position)&&placeMode==='alternate')return notice('AI 차례입니다. AI 착수 토글을 끄면 직접 둘 수 있어요.');
  if(action<81&&!node.position.legal_actions.includes(action))return notice('그 칸에는 둘 수 없어요.',true);
  cancel();const token=controls.epoch,study=doc;moving=true;
- if(!fromAI&&controls.anyAI()&&placeMode==='alternate')controls.playing=true;
  render();
  try{
   let next;
@@ -236,6 +266,7 @@ async function place(action,fromAI=false){
    next=await finalizePosition(makeNextPosition(node.position,action));
   }
   if(study!==doc||token!==controls.epoch)return;
+  applyPinsOnNavigation();
   addNode(doc,node.id,action,next);onceNode=null;save();notice('');
  }finally{moving=false;if(token===controls.epoch)render();}
  if(token===controls.epoch&&placeMode==='alternate')schedule();
@@ -268,14 +299,14 @@ function renderPlacementBar(){
  }
 }
 function renderBoard(){
- const node=active(),p=preview?.position||node.position,visible=visibleAnalysis();
+ const node=active(),p=preview?.position||node.position,visible=visibleAnalysis(),L=settings.layers;
  const boardEl=$('board');
  if(boardEl){
   boardEl.classList?.toggle?.('placing-red',placeMode==='place-red');
   boardEl.classList?.toggle?.('placing-blue',placeMode==='place-blue');
   boardEl.classList?.toggle?.('placing-neutral',placeMode==='place-neutral');
   boardEl.classList?.toggle?.('placing-remove',placeMode==='remove');
-  boardEl.innerHTML=boardSvg(p,{actions:[...pathTo(doc,node.id),...(preview?.actions||[])],lastAction:preview?.actions.at(-1)??node.action,analysis:preview?null:visible,showTerritory:settings.territory,showOwnership:settings.layers.ownership,showCandidates:settings.layers.policy&&Boolean(visible)&&!preview,showNumbers:settings.numbers});
+  boardEl.innerHTML=boardSvg(p,{actions:[...pathTo(doc,node.id),...(preview?.actions||[])],lastAction:preview?.actions.at(-1)??node.action,analysis:preview?null:visible,showTerritory:settings.territory,showOwnership:L.ownership&&Boolean(visible),showCandidates:L.policy&&Boolean(visible)&&!preview,showPV:L.pv&&Boolean(visible)&&!preview,showNumbers:settings.numbers});
   const svg=boardEl.querySelector?.('svg');
   if(svg){
    svg.classList?.toggle?.('placing-red',placeMode==='place-red');
@@ -298,6 +329,40 @@ function renderBoard(){
  if($('pass'))$('pass').disabled=Boolean(p.result||preview||moving||controls.aiTurn(p)||(backend()==='local'&&!local)||placeMode!=='alternate');
  if($('preview-exit'))$('preview-exit').hidden=!preview;
  if($('preview-label'))$('preview-label').hidden=!(settings.layers.ownership&&visible);
+
+ // Left: Winrate vertical bar (Red on top, Blue on bottom)
+ const values=redEvaluation(visible,doc.setup.komi);
+ if($('win-column'))$('win-column').hidden=!(L.win&&visible);
+ if($('win-value'))$('win-value').textContent=pct(values.win);
+ if($('win-summary-value'))$('win-summary-value').textContent=pct(values.win);
+ if($('red-percent'))$('red-percent').textContent=pct(values.win);
+ if($('blue-percent'))$('blue-percent').textContent=pct(values.win===null?null:1-values.win);
+ if($('win-fill'))$('win-fill').style.height=values.win===null?'0%':`${values.win*100}%`;
+
+ // Right: Expected score difference (집차이) vertical bar
+ if($('margin-column'))$('margin-column').hidden=!(L.margin&&visible);
+ if(values.margin!==null&&values.margin!==undefined){
+  const m=values.margin;
+  if(m>=0){
+   if($('margin-red-percent'))$('margin-red-percent').textContent=`+${m.toFixed(1)}집`;
+   if($('margin-blue-percent'))$('margin-blue-percent').textContent='—';
+   if($('margin-fill-red'))$('margin-fill-red').style.height=`${Math.min(100,(m/15)*50)}%`;
+   if($('margin-fill-blue'))$('margin-fill-blue').style.height='0%';
+   if($('margin-column-value')){$('margin-column-value').textContent=`+${m.toFixed(1)}집`;$('margin-column-value').style.color='#ee6338';}
+  }else{
+   if($('margin-red-percent'))$('margin-red-percent').textContent='—';
+   if($('margin-blue-percent'))$('margin-blue-percent').textContent=`+${(-m).toFixed(1)}집`;
+   if($('margin-fill-red'))$('margin-fill-red').style.height='0%';
+   if($('margin-fill-blue'))$('margin-fill-blue').style.height=`${Math.min(100,((-m)/15)*50)}%`;
+   if($('margin-column-value')){$('margin-column-value').textContent=`${m.toFixed(1)}집`;$('margin-column-value').style.color='#4173e6';}
+  }
+ }else{
+  if($('margin-red-percent'))$('margin-red-percent').textContent='—';
+  if($('margin-blue-percent'))$('margin-blue-percent').textContent='—';
+  if($('margin-fill-red'))$('margin-fill-red').style.height='0%';
+  if($('margin-fill-blue'))$('margin-fill-blue').style.height='0%';
+  if($('margin-column-value')){$('margin-column-value').textContent='—';$('margin-column-value').style.color='var(--ink)';}
+ }
 }
 function renderAnalysis(){
  const analysis=visibleAnalysis(),values=redEvaluation(analysis,doc.setup.komi),L=settings.layers;
@@ -363,8 +428,9 @@ function renderSettings(){
  if($('search-visits-num'))$('search-visits-num').textContent=`${visitsNum.toLocaleString()} visits`;
  if($('search-status'))$('search-status').textContent=`${stateText} · ${visitsNum.toLocaleString()} visits · ${(a?.cumulative_elapsed_seconds??a?.mcts?.elapsed_seconds??0).toFixed(1)}초`;
  
- // 2.2 현재 국면 분석 버튼 & 토글
+ // 2.2 현재 국면 분석 버튼 & 분석 고정 토글
  if($('analyze-button')){$('analyze-button').textContent=analyzing?'분석 중지':'현재 국면 분석';$('analyze-button').classList.toggle('active',analyzing);$('analyze-button').disabled=moving||batching||!modelAvailable()||Boolean(node?.position?.result&&!analyzing);}
+ setSwitch('analysis-pin',settings.analysisPinned);
  setSwitch('once-auto-show',settings.onceAutoShow);
  
  // 2.3 이번 턴부터 계속 분석 토글 (빨강 / 파랑)
@@ -420,12 +486,21 @@ function renderSettings(){
    }
  }
 
- // 3. 시각화
- const once=onceNode===node?.id,hasResult=Boolean(a)||analyzing;
- if($('visual-once')){$('visual-once').classList.toggle('active',once);$('visual-once').setAttribute('aria-pressed',String(once));$('visual-once').classList.toggle('soft-disabled',!hasResult&&!once);$('visual-once').textContent=once?'이번 턴 실시간 보는 중':'이번 턴만 실시간 보기';}
- setSwitch('visual-continuous',controls.visualContinuous,{soft:!controls.anyContinuous()});
- if($('visual-hint'))$('visual-hint').textContent=!controls.anyContinuous()?'계속 보기는 계속 분석(빨강/파랑 턴)이 켜져 있어야 해요.':!hasResult&&!once?'이번 턴은 아직 분석 전이에요. 누르면 분석부터 시작할지 물어봐요.':controls.visualContinuous?'모든 턴의 분석을 실시간으로 보여줘요.':once?'이 국면에서만 실시간으로 보여줘요.':'';
+ // 3. 시각화 스택 버튼 및 고정 토글
+ for(const [k,layerKey] of [
+   ['ownership','ownership'],['policy','policy'],['pv','pv'],
+   ['win','win'],['margin','margin'],['territory','territory'],['numbers','numbers']
+ ]){
+   const btn=$(`vis-btn-${k}`);
+   const isActive=k==='territory'?settings.territory:k==='numbers'?settings.numbers:settings.layers[layerKey];
+   if(btn){
+     btn.classList.toggle('active',Boolean(isActive));
+     btn.setAttribute('aria-pressed',String(Boolean(isActive)));
+   }
+   setSwitch(`vis-pin-${k}`,settings.pins[k]);
+ }
  setSwitch('ownership-toggle',settings.layers.ownership);for(const k of ['policy','win','margin','pv'])setSwitch(`layer-${k}`,settings.layers[k]);
+ setSwitch('territory-toggle',settings.territory);setSwitch('numbers-toggle',settings.numbers);
 
  // 4. 착수
  for(const s of SIDES){
@@ -434,9 +509,9 @@ function renderSettings(){
    if(pUnit)pUnit.value=settings.play[s].unit;
    if(pVal&&document.activeElement!==pVal)pVal.value=String(settings.play[s].value);
  }
- if($('ai-resume')){$('ai-resume').hidden=!(controls.anyAI()&&!controls.playing)||Boolean(node?.position?.result)||placeMode!=='alternate';$('ai-resume').disabled=!modelAvailable()||batching||placeMode!=='alternate';}
+ const isLeaf=isLeafNode(doc,node?.id);
  const who=SIDES.filter(s=>controls.aiSide[s]).map(sideName).join('·');
- if($('play-status'))$('play-status').textContent=placeMode!=='alternate'?'성 배치 모드 · AI 착수 대기':!who?'AI 착수 꺼짐 · 양쪽을 직접 둡니다':controls.playing?`AI가 ${who}을(를) 둡니다`:`AI ${who} 착수 일시정지 · 수순 이동 중`;
+ if($('play-status'))$('play-status').textContent=placeMode!=='alternate'?'성 배치 모드 · AI 착수 대기':!who?'AI 착수 꺼짐 · 양쪽을 직접 둡니다':isLeaf?`AI가 ${who}을(를) 둡니다`:`AI ${who} 대기 중 · 과거 수 탐색 중`;
 
  // 2. 일반 시각화
  setSwitch('territory-toggle',settings.territory);setSwitch('numbers-toggle',settings.numbers);
@@ -464,7 +539,30 @@ function render(){if(!active()?.position)return;
  renderSettings();renderPlacementBar();renderBoard();renderAnalysis();renderTimeline();
 }
 async function previewPV(count){const a=visibleAnalysis();if(!a||moving)return;const epoch=controls.epoch,node=active(),actions=a.mcts.principal_variation.slice(0,count),p=await position({...positionRequest(),actions:[...pathTo(doc,node.id),...actions]});if(epoch!==controls.epoch)return;preview={position:p,actions};renderBoard();}
-async function importPV(){const actions=visibleAnalysis()?.mcts.principal_variation.slice(0,16)||[];if(!actions.length)return;cancel();controls.playing=false;const epoch=controls.epoch;moving=true;try{for(const a of actions){const p=await position({...positionRequest(),actions:[...pathTo(doc,doc.selected),a]});if(epoch!==controls.epoch)return;addNode(doc,doc.selected,a,p);}onceNode=null;save();}finally{if(epoch===controls.epoch){moving=false;render();schedule();}}}
+async function importPV(){
+ const actions=visibleAnalysis()?.mcts?.principal_variation?.slice(0,16)||[];
+ if(!actions.length)return;
+ cancel();
+ moving=true;
+ let parentId=doc.selected;
+ try{
+  for(const a of actions){
+   const parentNode=doc.nodes.find(n=>n.id===parentId);
+   if(!parentNode||parentNode.position.result)break;
+   if(a<81&&!parentNode.position.legal_actions.includes(a))break;
+   const next=await finalizePosition(makeNextPosition(parentNode.position,a));
+   const child=addNode(doc,parentId,a,next);
+   parentId=child.id;
+  }
+  onceNode=null;
+  save();
+  notice(`${actions.length}수의 예상 수순을 분기로 가져왔습니다.`);
+ }finally{
+  moving=false;
+  render();
+  schedule();
+ }
+}
 function populateModels(){
  const select=$('model-select');if(!select)return;
  select.replaceChildren();for(const m of (config?.models||[])){const o=new Option(m.label,m.id);select.append(o);}
@@ -581,7 +679,62 @@ $('analysis-limit-unit')?.addEventListener('change',()=>{
  enforceFloor();saveSettings();render();
 });
 
-// 3. 시각화
+// Drawer Controls
+$('drawer-toggle')?.addEventListener('click',()=>{
+ $('settings-drawer')?.classList.add('open');
+ if($('drawer-backdrop'))$('drawer-backdrop').hidden=false;
+});
+const closeDrawer=()=>{
+ $('settings-drawer')?.classList.remove('open');
+ if($('drawer-backdrop'))$('drawer-backdrop').hidden=true;
+};
+$('drawer-close')?.addEventListener('click',closeDrawer);
+$('drawer-backdrop')?.addEventListener('click',closeDrawer);
+
+// Analysis Pin Toggle
+$('analysis-pin')?.addEventListener('change',e=>{
+ settings.analysisPinned=e.target.checked;
+ saveSettings();
+ render();
+ if(settings.analysisPinned&&!analyzing&&!moving&&!batching)schedule();
+});
+
+// 3. 시각화 스택 버튼 및 고정 토글
+const VIS_KEYS=[
+ ['ownership','ownership'],['policy','policy'],['pv','pv'],
+ ['win','win'],['margin','margin'],['territory','territory'],['numbers','numbers']
+];
+for(const [k,layerKey] of VIS_KEYS){
+ $(`vis-btn-${k}`)?.addEventListener('click',()=>{
+  if(k==='territory'){
+   settings.territory=!settings.territory;
+   if(!settings.territory)settings.pins.territory=false;
+  }else if(k==='numbers'){
+   settings.numbers=!settings.numbers;
+   if(!settings.numbers)settings.pins.numbers=false;
+  }else{
+   settings.layers[layerKey]=!settings.layers[layerKey];
+   if(!settings.layers[layerKey]){
+    settings.pins[k]=false;
+    if(k==='pv')preview=null;
+   }
+  }
+  saveSettings();
+  render();
+ });
+ $(`vis-pin-${k}`)?.addEventListener('change',e=>{
+  const on=e.target.checked;
+  settings.pins[k]=on;
+  if(on){
+   if(k==='territory')settings.territory=true;
+   else if(k==='numbers')settings.numbers=true;
+   else settings.layers[layerKey]=true;
+  }
+  saveSettings();
+  render();
+ });
+}
+
 $('visual-once')?.addEventListener('click',()=>run(async()=>{
  const n=active();if(onceNode===n.id){onceNode=null;render();return;}
  if(nodeAnalysis(n)||analyzing){onceNode=n.id;render();return;}
@@ -599,7 +752,7 @@ for(const [id,key] of [['ownership-toggle','ownership'],['layer-policy','policy'
 // 4. 착수
 for(const s of SIDES){
  $(`play-${s}`)?.addEventListener('change',e=>{
-   cancel();controls.aiSide[s]=e.target.checked;controls.playing=controls.anyAI();
+   cancel();controls.aiSide[s]=e.target.checked;
    if(e.target.checked&&enforceFloor())notice(`분석 제한을 ${sideName(s)} 착수 탐색량(${budgetLabel(settings.analysisLimit)}) 이상으로 올렸어요.`);
    saveSettings();render();schedule();
  });
@@ -610,7 +763,7 @@ for(const s of SIDES){
  };
  $(`play-${s}-unit`)?.addEventListener('change',budgetChanged);$(`play-${s}-value`)?.addEventListener('change',budgetChanged);
 }
-$('ai-resume')?.addEventListener('click',()=>{cancel();controls.playing=true;render();schedule();});
+$('ai-resume')?.addEventListener('click',()=>{cancel();render();schedule();});
 $('ai-seconds')?.addEventListener('change',()=>{
  const val=Number($('ai-seconds').value);
  for(const s of SIDES)settings.play[s]={unit:'seconds',value:val};

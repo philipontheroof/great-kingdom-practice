@@ -9,8 +9,22 @@ export function timelineSvg(doc,analysisFor,mode='win'){
  const l=treeLayout(doc),line=lineThrough(doc,doc.selected),selected=new Set(line.map(n=>n.id)),x=p=>54+p*70;
  const points=line.map(n=>({n,v:redEvaluation(analysisFor(n),doc.setup.komi)})),score=mode==='score';
  const max=Math.max(10,...points.map(p=>Math.abs(p.v.margin??0))),value=p=>score?p.v.margin:p.v.win,y=v=>score?80-v/max*52:132-v*104;
- let svg=`<svg width="${l.width}" height="${l.height+205}" viewBox="0 0 ${l.width} ${l.height+205}" role="group" aria-label="선택 가지 평가와 수순 분기 트리"><line x1="34" x2="${l.width-20}" y1="80" y2="80" stroke="#d7dee6" stroke-dasharray="4 4"/><text x="10" y="32" class="axis-label">${score?max.toFixed(0):'100%'}</text><text x="10" y="84" class="axis-label">${score?'0':'50%'}</text><text x="10" y="136" class="axis-label">${score?'-'+max.toFixed(0):'0%'}</text>`;
- let prev=null;for(const p of points){const v=value(p);if(v!==null){if(prev)svg+=`<line x1="${x(prev.n.ply)}" y1="${y(value(prev))}" x2="${x(p.n.ply)}" y2="${y(v)}" stroke="#ce8062" stroke-width="2.5"/>`;svg+=`<circle cx="${x(p.n.ply)}" cy="${y(v)}" r="3.5" fill="#ce8062"/>`;prev=p;}else prev=null;svg+=`<g data-node="${p.n.id}" tabindex="0" role="button" aria-label="${p.n.ply}수로 이동"><rect x="${x(p.n.ply)-25}" y="20" width="50" height="130" fill="transparent"/><text x="${x(p.n.ply)}" y="164" text-anchor="middle" class="axis-label">${p.n.ply}수</text></g>`;}
+ let svg=`<svg width="${l.width}" height="${l.height+205}" viewBox="0 0 ${l.width} ${l.height+205}" role="group" aria-label="선택 가지 평가와 수순 분기 트리"><line x1="34" x2="${l.width-20}" y1="80" y2="80" stroke="#d7dee6" stroke-dasharray="4 4"/><text x="12" y="32" class="axis-label" fill="#ee6338" font-weight="750">${score?`+${max.toFixed(0)}집`:'빨강'}</text><text x="12" y="84" class="axis-label" fill="#7a8795" font-weight="600">균형</text><text x="12" y="136" class="axis-label" fill="#4173e6" font-weight="750">${score?`-${max.toFixed(0)}집`:'파랑'}</text>`;
+ let prev=null;for(const p of points){
+  const v=value(p);
+  if(v!==null){
+   const currY=y(v);
+   const currColor=currY<79?'#ee6338':currY>81?'#4173e6':'#8a9ba8';
+   if(prev){
+    const prevY=y(value(prev));
+    const lineColor=(currY<80&&prevY<80)?'#ee6338':(currY>80&&prevY>80)?'#4173e6':'#b0bec5';
+    svg+=`<line x1="${x(prev.n.ply)}" y1="${prevY}" x2="${x(p.n.ply)}" y2="${currY}" stroke="${lineColor}" stroke-width="2.5"/>`;
+   }
+   svg+=`<circle cx="${x(p.n.ply)}" cy="${currY}" r="4" fill="${currColor}" stroke="#ffffff" stroke-width="1.5"/>`;
+   prev=p;
+  }else prev=null;
+  svg+=`<g data-node="${p.n.id}" tabindex="0" role="button" aria-label="${p.n.ply}수로 이동"><rect x="${x(p.n.ply)-25}" y="20" width="50" height="130" fill="transparent"/><text x="${x(p.n.ply)}" y="164" text-anchor="middle" class="axis-label">${p.n.ply}수</text></g>`;
+ }
  svg+=`<line x1="${x(doc.nodes.find(n=>n.id===doc.selected).ply)}" x2="${x(doc.nodes.find(n=>n.id===doc.selected).ply)}" y1="15" y2="175" stroke="#365969" stroke-opacity=".25"/>`;
  if(!points.some(p=>value(p)!==null))svg+='<text x="340" y="60" text-anchor="middle" class="axis-label">미분석 구간 · 아래 한번에 다시 분석에서 계산할 수 있어요</text>';
  for(const e of l.edges){const a=e.from,b=e.to;svg+=`<path d="M${a.x+23} ${a.y+211} C${a.x+36} ${a.y+211},${b.x-36} ${b.y+211},${b.x-23} ${b.y+211}" fill="none" stroke="${selected.has(b.id)?'#73918d':'#d8dfe6'}" stroke-width="${selected.has(b.id)?2:1.5}"/>`;}

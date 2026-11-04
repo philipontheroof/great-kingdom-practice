@@ -3,6 +3,14 @@ import {BrowserSearch} from './browser-search.mjs';
 import {decodeNetworkHeads} from './local-client.mjs';
 
 let ort=null,session=null,manifest=null,backend=null,generation=0;
+let inferenceLock=Promise.resolve();
+function acquireInferenceLock(){
+  let release;
+  const nextLock=new Promise(resolve=>{release=resolve;});
+  const currentLock=inferenceLock;
+  inferenceLock=inferenceLock.then(()=>nextLock);
+  return currentLock.then(()=>release);
+}
 const reply=(id,type,value)=>postMessage({id,type,value});
 const errorText=e=>String(e?.message||e||'Browser model runtime failed');
 const sha256=async bytes=>[...new Uint8Array(await crypto.subtle.digest('SHA-256',bytes))].map(x=>x.toString(16).padStart(2,'0')).join('');
@@ -48,13 +56,16 @@ async function initialize(value,id){
 
 function tensor(array,dims){return new ort.Tensor('float32',array,dims);}
 async function infer(state){
-  const f=features(state),feeds={spatial:tensor(f.spatial,[1,12,9,9]),global_features:tensor(f.global_features,[1,3])};let out;
-  try{out=await session.run(feeds);}catch(error){if(backend!=='webgpu')throw error;await fallbackToWasm();out=await session.run(feeds);}
-  if(out.policy_logits.data.length!==82||out.value_logit.data.length!==1||out.score_logits.data.length!==manifest.shapes.score_logits[0]||out.ownership_logits.data.length!==243)throw Error('ONNX session returned unexpected output dimensions');
-  if(![out.policy_logits.data,out.value_logit.data,out.score_logits.data,out.ownership_logits.data].every(values=>Array.from(values).every(Number.isFinite)))throw Error('ONNX session returned a non-finite model output');
-  return decodeNetworkHeads({policy_logits:out.policy_logits.data,value_logit:out.value_logit.data,
-    score_logits:out.score_logits.data,ownership_logits:out.ownership_logits.data},
-    {legalActions:positionPayload(state).legal_actions,scoreMin:manifest.score_min});
+  const release=await acquireInferenceLock();
+  try{
+    const f=features(state),feeds={spatial:tensor(f.spatial,[1,12,9,9]),global_features:tensor(f.global_features,[1,3])};let out;
+    try{out=await session.run(feeds);}catch(error){if(backend!=='webgpu')throw error;console.warn('WebGPU inference failed, attempting WASM fallback:',error);await fallbackToWasm();out=await session.run(feeds);}
+    if(out.policy_logits.data.length!==82||out.value_logit.data.length!==1||out.score_logits.data.length!==manifest.shapes.score_logits[0]||out.ownership_logits.data.length!==243)throw Error('ONNX session returned unexpected output dimensions');
+    if(![out.policy_logits.data,out.value_logit.data,out.score_logits.data,out.ownership_logits.data].every(values=>Array.from(values).every(Number.isFinite)))throw Error('ONNX session returned a non-finite model output');
+    return decodeNetworkHeads({policy_logits:out.policy_logits.data,value_logit:out.value_logit.data,
+      score_logits:out.score_logits.data,ownership_logits:out.ownership_logits.data},
+      {legalActions:positionPayload(state).legal_actions,scoreMin:manifest.score_min});
+  }finally{release();}
 }
 
 async function position(payload){
@@ -100,11 +111,28 @@ onmessage=async event=>{
   const {id,type,value,options={}}=event.data||{};
   try{
     if(type==='cancel'){generation++;return;}
-    if(type==='initialize'){generation++;reply(id,'update',{stage:'runtime',status:'loading'});reply(id,'result',await initialize(value,id));return;}
+    if(type==='initialize'){
+      generation++;
+      const release=await acquireInferenceLock();
+      try{
+        reply(id,'update',{stage:'runtime',status:'loading'});
+        reply(id,'result',await initialize(value,id));
+      }finally{release();}
+      return;
+    }
     if(type==='position'){reply(id,'result',await position(value));return;}
     if(!session)throw Error('Initialize the browser model first');
     if(type==='analyze'){const thisGeneration=++generation;reply(id,'result',await analyze(id,value,options,thisGeneration));return;}
-    if(type==='close'){generation++;await session?.release?.();session=null;manifest=null;backend=null;reply(id,'result',true);return;}
+    if(type==='close'){
+      generation++;
+      const release=await acquireInferenceLock();
+      try{
+        await session?.release?.();
+        session=null;manifest=null;backend=null;
+        reply(id,'result',true);
+      }finally{release();}
+      return;
+    }
     throw Error('Unknown local engine request');
   }catch(error){reply(id,'error',{name:error?.name||'Error',message:errorText(error)});}
 };
