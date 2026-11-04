@@ -33,20 +33,18 @@ const canAiPlay=()=>placeMode==='alternate';
 const active=()=>doc?.nodes.find(n=>n.id===doc.selected);
 const backend=()=>$('backend')?.value||(staticOnly?'local':'host');
 const modelAvailable=()=>backendReady&&Boolean(config?.models.some(m=>m.id===doc?.model_id))&&(backend()==='host'||localModel===doc?.model_id);
-const nodeAnalysis=n=>n?.analysis&&n.analysis.backend===backend()&&(!n.analysis.model||n.analysis.model.id===doc.model_id)?n.analysis:null;
-const visibleFor=n=>{
- if(!n)return false;
- if(controls.visualContinuous)return true;
- if(onceNode===n.id)return true;
- if(controls.visible&&shown.has(n.id))return true;
- return false;
-};
+const nodeAnalysis=n=>n?.analysis&&n.analysis.backend===backend()&&(!n.analysis.model||n.analysis.model.id===doc?.model_id)?n.analysis:null;
 const displayAnalysis=n=>{
+ if(!n)return null;
  const a=shown.get(n.id)||nodeAnalysis(n);
- return (visibleFor(n)||(controls.visible&&Boolean(shown.get(n.id))))&&a&&a.backend===backend()&&(!a.model||a.model.id===doc.model_id)?a:null;
+ if(!a)return null;
+ if(a.backend!==backend())return null;
+ if(a.model&&a.model.id!==doc?.model_id)return null;
+ return a;
 };
+const visibleFor=n=>Boolean(displayAnalysis(n));
 const visibleAnalysis=()=>displayAnalysis(active());
-const graphAnalysis=n=>n.id===doc.selected&&!visibleFor(n)?null:nodeAnalysis(n);
+const graphAnalysis=n=>nodeAnalysis(n);
 const coord=a=>a===81?'패스':`${Math.floor(a/9)+1}·${a%9+1}`;
 const pct=v=>typeof v==='number'?`${(v*100).toFixed(1)}%`:'—';
 const signed=v=>typeof v==='number'?`${v>0?'+':''}${v.toFixed(1)}`:'—';
@@ -332,7 +330,7 @@ function renderBoard(){
 
  // Left: Winrate vertical bar (Red on top, Blue on bottom)
  const values=redEvaluation(visible,doc.setup.komi);
- if($('win-column'))$('win-column').hidden=!(L.win&&visible);
+ if($('win-column'))$('win-column').hidden=!L.win;
  if($('win-value'))$('win-value').textContent=pct(values.win);
  if($('win-summary-value'))$('win-summary-value').textContent=pct(values.win);
  if($('red-percent'))$('red-percent').textContent=pct(values.win);
@@ -340,7 +338,7 @@ function renderBoard(){
  if($('win-fill'))$('win-fill').style.height=values.win===null?'0%':`${values.win*100}%`;
 
  // Right: Expected score difference (집차이) vertical bar
- if($('margin-column'))$('margin-column').hidden=!(L.margin&&visible);
+ if($('margin-column'))$('margin-column').hidden=!L.margin;
  if(values.margin!==null&&values.margin!==undefined){
   const m=values.margin;
   if(m>=0){
@@ -366,11 +364,11 @@ function renderBoard(){
 }
 function renderAnalysis(){
  const analysis=visibleAnalysis(),values=redEvaluation(analysis,doc.setup.komi),L=settings.layers;
- if($('analysis-source'))$('analysis-source').textContent=analysis?sourceLabel(analysis.source):visibleFor(active())?'분석 전':'숨김';
+ if($('analysis-source'))$('analysis-source').textContent=analysis?sourceLabel(analysis.source):'분석 전';
  if($('result-empty'))$('result-empty').hidden=Boolean(analysis);
  if($('result-body'))$('result-body').hidden=!analysis;
- if($('result-empty'))$('result-empty').textContent=!doc.model_id?'모델이 연결되지 않았어요. 양쪽 성을 직접 두며 국면을 살펴볼 수 있어요.':active().position.result&&visibleFor(active())?'대국이 종료되었어요. 이전 수로 돌아가 새 가지를 만들어 보세요.':visibleFor(active())?'이 국면은 아직 분석 전이에요. 1 · 분석에서 시작할 수 있어요.':'시각화가 꺼져 있어요. 1 · 시각화에서 현재 국면만 보거나 계속 볼 수 있어요.';
- if($('win-column'))$('win-column').hidden=!(L.win&&analysis);
+ if($('result-empty'))$('result-empty').textContent=!doc.model_id?'모델이 연결되지 않았어요. 양쪽 성을 직접 두며 국면을 살펴볼 수 있어요.':active().position.result?'대국이 종료되었어요. 이전 수로 돌아가 새 가지를 만들어 보세요.':'이 국면은 아직 분석 전이에요. [현재 국면 분석]을 누르거나 [📌 분석 고정]을 켜면 바로 분석돼요.';
+ if($('win-column'))$('win-column').hidden=!L.win;
  if($('win-value'))$('win-value').textContent=pct(values.win);
  if($('red-percent'))$('red-percent').textContent=pct(values.win);
  if($('blue-percent'))$('blue-percent').textContent=pct(values.win===null?null:1-values.win);
@@ -721,6 +719,9 @@ for(const [k,layerKey] of VIS_KEYS){
   }
   saveSettings();
   render();
+  if(k!=='territory'&&k!=='numbers'&&settings.layers[layerKey]&&!nodeAnalysis(active())&&!analyzing&&!moving&&!batching&&modelAvailable()){
+   run(()=>startAnalysis({kind:'once'}));
+  }
  });
  $(`vis-pin-${k}`)?.addEventListener('change',e=>{
   const on=e.target.checked;
@@ -732,6 +733,9 @@ for(const [k,layerKey] of VIS_KEYS){
   }
   saveSettings();
   render();
+  if(k!=='territory'&&k!=='numbers'&&settings.layers[layerKey]&&!nodeAnalysis(active())&&!analyzing&&!moving&&!batching&&modelAvailable()){
+   run(()=>startAnalysis({kind:'once'}));
+  }
  });
 }
 

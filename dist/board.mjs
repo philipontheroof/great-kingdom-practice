@@ -64,7 +64,7 @@ export function boardSvg(position,{actions=[],lastAction=null,analysis=null,show
     }
     if(pvMap.has(i)) {
       const pv=pvMap.get(i);
-      svg+=`<g class="pv-marker" aria-label="예상 ${pv.step}수"><circle cx="${x-13}" cy="${y-13}" r="10" fill="url(#${pv.side==='first'?'red':'blue'}Stone)" stroke="#ffffff" stroke-width="1.5" filter="url(#castleShadow)"/><text class="pv-step-number" x="${x-13}" y="${y-10}" text-anchor="middle" fill="#ffffff" font-size="10" font-weight="800">${pv.step}</text></g>`;
+      svg+=`<g class="pv-marker" aria-label="예상 ${pv.step}수"><circle cx="${x-13}" cy="${y-13}" r="10" fill="url(#${pv.side==='first'?'red':'blue'}Stone)" stroke="#ffffff" stroke-width="1.5" filter="url(#castleShadow)"/><text class="pv-step-number" x="${x-13}" y="${y-13}" text-anchor="middle" dominant-baseline="central" fill="#ffffff" font-size="10" font-weight="800">${pv.step}</text></g>`;
     }
     svg+='</g>';
   }
