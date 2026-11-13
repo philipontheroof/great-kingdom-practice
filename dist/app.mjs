@@ -17,6 +17,7 @@ const settings={
  layers:{ownership:true,policy:true,win:true,margin:true,pv:true},
  pins:{ownership:true,policy:true,win:true,margin:true,pv:true,territory:true,numbers:true},
  play:{first:{unit:'seconds',value:2.0},second:{unit:'seconds',value:2.0}},
+ ponder:true,
  territory:true,numbers:true,
  batch:{scope:'branch',target:'missing',budget:{unit:'seconds',value:1.0}},
 };
@@ -72,7 +73,7 @@ function loadSettings(){
   for(const k of Object.keys(settings.pins))if(typeof saved.pins[k]==='boolean')settings.pins[k]=saved.pins[k];
  }
  for(const s of SIDES)if(saved.play?.[s])settings.play[s]=normalizeBudget(saved.play[s],{fallback:'seconds'});
- for(const k of ['territory','numbers'])if(typeof saved[k]==='boolean')settings[k]=saved[k];
+ for(const k of ['territory','numbers','ponder'])if(typeof saved[k]==='boolean')settings[k]=saved[k];
  if(['branch','all'].includes(saved.batch?.scope))settings.batch.scope=saved.batch.scope;
  if(['missing','all'].includes(saved.batch?.target))settings.batch.target=saved.batch.target;
  if(saved.batch?.budget)settings.batch.budget=normalizeBudget(saved.batch.budget,{fallback:'seconds'});
@@ -220,12 +221,12 @@ async function setTurnSide(side){
 async function startAnalysis({ai=false,kind=ai?'ai':'once'}={}){
  if(!active()||moving||batching||!modelAvailable()||(ai&&!canAiPlay()))return;
  cancel();const node=active(),study=doc,model=doc.model_id,execution=backend(),token=controls.begin(node.id,model,execution),controller=new AbortController();analysisController=controller;analyzing=true;analysisKind=kind;
- const budget=ai?settings.play[node.position.side_to_move]:settings.analysisLimit;render();
+ const ponder=kind==='ponder',budget=ai?settings.play[node.position.side_to_move]:ponder?{unit:'seconds',value:120}:settings.analysisLimit;if(!ponder)render();else renderSettings();
  const valid=()=>study===doc&&controls.accepts(token,doc.selected,doc.model_id,backend());let result;
- try{result=await search(node,budget,{signal:controller.signal,onUpdate:r=>{if(valid()){acceptResult(r,node,model,execution);if(r.done||Date.now()-lastPaint>=180){lastPaint=Date.now();render();}}}});
- if(!valid())return;acceptResult(result,node,model,execution);notice('');
- }catch(error){if(error.name!=='AbortError'&&valid())notice(error.message,true);return;}
- finally{analyzing=false;analysisKind=null;analysisController=null;if(valid())render();}
+ try{result=await search(node,budget,{signal:controller.signal,onUpdate:r=>{if(valid()&&!ponder){acceptResult(r,node,model,execution);if(r.done||Date.now()-lastPaint>=180){lastPaint=Date.now();render();}}}});
+ if(!valid())return;if(!ponder){acceptResult(result,node,model,execution);notice('');}
+ }catch(error){if(error.name!=='AbortError'&&valid()&&!ponder)notice(error.message,true);return;}
+ finally{analyzing=false;analysisKind=null;analysisController=null;if(valid()){if(!ponder)render();else renderSettings();}}
  if(ai&&valid()&&isLeafNode(doc,node.id)&&controls.aiTurn(node.position)&&result?.recommended_action!==null&&result?.recommended_action!==undefined){await place(result.recommended_action,true);}
 }
 function schedule(){
@@ -238,6 +239,8 @@ function schedule(){
   queueMicrotask(()=>run(()=>startAnalysis({kind:'pinned'})));
  }else if(controls.continuous[n.position.side_to_move]&&!budgetReached(settings.analysisLimit,nodeAnalysis(n))){
   queueMicrotask(()=>run(()=>startAnalysis({kind:'continuous'})));
+ }else if(isLeaf&&!controls.aiTurn(n.position)&&controls.anyAI()&&settings.ponder&&backend()==='local'){
+  queueMicrotask(()=>run(()=>startAnalysis({kind:'ponder'})));
  }
 }
 async function selectNode(id){
@@ -335,7 +338,7 @@ function renderBoard(){
  if($('win-summary-value'))$('win-summary-value').textContent=pct(values.win);
  if($('blue-percent'))$('blue-percent').textContent=pct(values.win);
  if($('red-percent'))$('red-percent').textContent=pct(values.win===null?null:1-values.win);
- if($('win-fill'))$('win-fill').style.height=values.win===null?'0%':`${values.win*100}%`;
+ if($('win-fill')){$('win-fill').style.height=values.win===null?'0%':`${values.win*100}%`;if($('win-fill').parentElement)$('win-fill').parentElement.style.background=values.win===null?'#f1f5f9':'';}
 
  // Right: Expected score difference (집차이) vertical bar
  if($('margin-column'))$('margin-column').hidden=!L.margin;
@@ -372,7 +375,7 @@ function renderAnalysis(){
  if($('win-value'))$('win-value').textContent=pct(values.win);
  if($('blue-percent'))$('blue-percent').textContent=pct(values.win);
  if($('red-percent'))$('red-percent').textContent=pct(values.win===null?null:1-values.win);
- if($('win-fill'))$('win-fill').style.height=values.win===null?'0%':`${values.win*100}%`;
+ if($('win-fill')){$('win-fill').style.height=values.win===null?'0%':`${values.win*100}%`;if($('win-fill').parentElement)$('win-fill').parentElement.style.background=values.win===null?'#f1f5f9':'';}
  if($('margin-box'))$('margin-box').hidden=!L.margin;
  if($('margin-caption'))$('margin-caption').textContent=analysis?.source==='rule'?'종국 영토 차이':'예상 집차이';
  if($('margin-value'))$('margin-value').textContent=values.margin===null?'—':`${signed(values.margin)}집`;
@@ -507,9 +510,11 @@ function renderSettings(){
    if(pUnit)pUnit.value=settings.play[s].unit;
    if(pVal&&document.activeElement!==pVal)pVal.value=String(settings.play[s].value);
  }
+ setSwitch('play-ponder',settings.ponder);
  const isLeaf=isLeafNode(doc,node?.id);
  const who=SIDES.filter(s=>controls.aiSide[s]).map(sideName).join('·');
- if($('play-status'))$('play-status').textContent=placeMode!=='alternate'?'성 배치 모드 · AI 착수 대기':!who?'AI 착수 꺼짐 · 양쪽을 직접 둡니다':isLeaf?`AI가 ${who}을(를) 둡니다`:`AI ${who} 대기 중 · 과거 수 탐색 중`;
+ const pondering=analyzing&&analysisKind==='ponder';
+ if($('play-status'))$('play-status').textContent=placeMode!=='alternate'?'성 배치 모드 · AI 착수 대기':!who?'AI 착수 꺼짐 · 양쪽을 직접 둡니다':isLeaf?(pondering?`AI가 ${who}을(를) 둡니다 · 미리 탐색 중…`:`AI가 ${who}을(를) 둡니다`):`AI ${who} 대기 중 · 과거 수 탐색 중`;
 
  // 2. 일반 시각화
  setSwitch('territory-toggle',settings.territory);setSwitch('numbers-toggle',settings.numbers);
@@ -768,6 +773,7 @@ for(const s of SIDES){
  $(`play-${s}-unit`)?.addEventListener('change',budgetChanged);$(`play-${s}-value`)?.addEventListener('change',budgetChanged);
 }
 $('ai-resume')?.addEventListener('click',()=>{cancel();render();schedule();});
+$('play-ponder')?.addEventListener('change',e=>{settings.ponder=e.target.checked;saveSettings();if(!settings.ponder&&analysisKind==='ponder')cancel();render();if(settings.ponder)schedule();});
 $('ai-seconds')?.addEventListener('change',()=>{
  const val=Number($('ai-seconds').value);
  for(const s of SIDES)settings.play[s]={unit:'seconds',value:val};

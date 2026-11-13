@@ -1,4 +1,4 @@
-import {facts,playAction,positionPayload} from './engine.mjs';
+import {canonicalState,facts,playAction,positionPayload} from './engine.mjs';
 const now=()=>globalThis.performance?.now?.()??Date.now();
 const opponent=p=>p==='first'?'second':'first';
 const winnerValue=(state,winner)=>state.side_to_move===winner?1:-1;
@@ -54,6 +54,20 @@ export class BrowserSearch {
     }
     if(this.rootVisits&&this.exact?.status!=='immediate_win')this.source='mcts';
     return this.snapshot();
+  }
+  findSubtree(targetCanonical){
+    for(const e of this.root?.edges||[]){
+      if(e.child?.expanded&&canonicalState(e.child.state)===targetCanonical)return e.child;
+    }
+    return null;
+  }
+  static fromNode(node,evaluateAsync,{cPuct=1.5}={}){
+    const search=new BrowserSearch(node.state,evaluateAsync,{cPuct});
+    search.root=node;
+    search.rootVisits=node.visits;
+    search.exact=node.tactical??null;
+    search.source=node.state.result?'rule':(node.tactical?.status==='immediate_win'?'tactical':(node.visits?'mcts':'network'));
+    return search;
   }
   snapshot(){
     if(this.state.result){const win=this.state.result.winner===this.state.side_to_move?1:0;return {source:'rule',proven_winner:this.state.result.winner,exact:{source:'rule',status:'terminal',proven_winner:this.state.result.winner,threats:[]},recommended_action:null,mcts:{root_visits:0,root_win_probability:win,candidates:[],principal_variation:[],elapsed_seconds:0}};}

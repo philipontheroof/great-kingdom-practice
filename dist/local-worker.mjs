@@ -3,6 +3,17 @@ import {BrowserSearch} from './browser-search.mjs';
 import {decodeNetworkHeads} from './local-client.mjs';
 
 let ort=null,session=null,manifest=null,backend=null,generation=0;
+const rawCache=new Map(),treeCache=new Map(),MAX_RAW_CACHE=64,MAX_TREE_CACHE=24;
+function lruGet(map,key){if(!map.has(key))return undefined;const val=map.get(key);map.delete(key);map.set(key,val);return val;}
+function lruSet(map,key,val,max){if(map.has(key))map.delete(key);map.set(key,val);while(map.size>max)map.delete(map.keys().next().value);}
+async function cachedInfer(state){
+  const key=`${manifest.model_id}:${canonicalState(state)}`;
+  const hit=lruGet(rawCache,key);
+  if(hit)return hit;
+  const res=await infer(state);
+  lruSet(rawCache,key,res,MAX_RAW_CACHE);
+  return res;
+}
 let inferenceLock=Promise.resolve();
 function acquireInferenceLock(){
   let release;
@@ -87,12 +98,28 @@ async function analyze(id,payload,options,runGeneration){
   if(state.result)return {...base(),source:'rule',raw_network:null,exact:{source:'rule',proven_winner:state.result.winner,status:'terminal',threats:[]},proven_winner:state.result.winner,recommended_action:null,mcts:{root_visits:0,root_win_probability:state.result.winner===state.side_to_move?1:0,candidates:[],principal_variation:[],elapsed_seconds:0},done:true,cumulative_elapsed_seconds:(performance.now()-streamStartedAt)/1000};
   // Keep the four raw heads available even when tactics bypass neural expansion.
   // BrowserSearch consumes this cached result for its root expansion.
-  const raw=await infer(state),searchStartedAt=performance.now(),search=new BrowserSearch(state,async s=>s===state?raw:infer(s));
+  const targetCanonical=canonicalState(state),treeKey=`${manifest.model_id}:${pos.state_id}`;
+  let cached=lruGet(treeCache,treeKey),raw,search;
+  if(cached){
+    raw=cached.raw;search=cached.search;search.started=performance.now();
+  }else{
+    let promoted=null;
+    const entries=[...treeCache.values()].reverse();
+    for(const entry of entries){
+      const sub=entry.search.findSubtree(targetCanonical);
+      if(sub){promoted=sub;break;}
+    }
+    raw=await cachedInfer(state);
+    search=promoted?BrowserSearch.fromNode(promoted,s=>cachedInfer(s)):new BrowserSearch(state,s=>s===state?raw:cachedInfer(s));
+    lruSet(treeCache,treeKey,{search,raw},MAX_TREE_CACHE);
+  }
+  const searchStartedAt=performance.now();
   const deadline=searchStartedAt+seconds*1000,continuousDeadline=maxSeconds===null?Infinity:streamStartedAt+maxSeconds*1000;let snapshot,lastUpdateAt=null;
   do{
     if(runGeneration!==generation)throw new DOMException('Analysis cancelled','AbortError');
     const remaining=maxVisits-search.rootVisits;
-    snapshot=await search.advance(continuous?Math.min(8,remaining):Math.min(8,visits-search.rootVisits),{deadline:continuous?continuousDeadline:deadline,stopped:()=>runGeneration!==generation});
+    const stepVisits=continuous?Math.max(0,Math.min(8,remaining)):Math.max(0,Math.min(8,visits-search.rootVisits));
+    snapshot=await search.advance(stepVisits,{deadline:continuous?continuousDeadline:deadline,stopped:()=>runGeneration!==generation});
     const done=!continuous?(snapshot.mcts.root_visits>=visits||performance.now()>=deadline):(snapshot.mcts.root_visits>=maxVisits||performance.now()>=continuousDeadline);
     const result={...snapshot,...base(),raw_network:{policy:raw.policy82,win_probability:raw.win_probability,expected_score:raw.expected_score,score_min:raw.score_min,score_distribution:raw.score_distribution,territory_probabilities:raw.territory_probabilities},done,cumulative_elapsed_seconds:(performance.now()-streamStartedAt)/1000};
     const now=performance.now();
@@ -113,6 +140,7 @@ onmessage=async event=>{
     if(type==='cancel'){generation++;return;}
     if(type==='initialize'){
       generation++;
+      rawCache.clear();treeCache.clear();
       const release=await acquireInferenceLock();
       try{
         reply(id,'update',{stage:'runtime',status:'loading'});
@@ -125,6 +153,7 @@ onmessage=async event=>{
     if(type==='analyze'){const thisGeneration=++generation;reply(id,'result',await analyze(id,value,options,thisGeneration));return;}
     if(type==='close'){
       generation++;
+      rawCache.clear();treeCache.clear();
       const release=await acquireInferenceLock();
       try{
         await session?.release?.();
