@@ -68,5 +68,11 @@ export function boardSvg(position,{actions=[],lastAction=null,analysis=null,show
     }
     svg+='</g>';
   }
+  if(position.result?.reason==='pass_score'){
+    svg+=`<g class="pass-badge" pointer-events="none" aria-label="연속 패스 종국"><rect x="226" y="575" width="150" height="24" rx="12" fill="#1e293b" filter="url(#castleShadow)"/><text x="301" y="587" text-anchor="middle" dominant-baseline="central" fill="#ffffff" font-size="11.5" font-weight="750">연속 패스 · 종국</text></g>`;
+  }else if(position.previous_move_was_pass){
+    const passedBlue=position.side_to_move==='second';
+    svg+=`<g class="pass-badge" pointer-events="none" aria-label="${passedBlue?'파란':'빨간'} 성 패스"><rect x="233" y="575" width="136" height="24" rx="12" fill="${passedBlue?'#4173e6':'#ee6338'}" filter="url(#castleShadow)"/><text x="301" y="587" text-anchor="middle" dominant-baseline="central" fill="#ffffff" font-size="11.5" font-weight="750">${passedBlue?'파란':'빨간'} 성 패스</text></g>`;
+  }
   return svg+'</svg>';
 }

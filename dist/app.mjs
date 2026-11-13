@@ -322,7 +322,7 @@ function renderBoard(){
  if($('blue-player'))$('blue-player').textContent=controls.aiSide.first?'AI':'사람';
  if($('red-player'))$('red-player').textContent=controls.aiSide.second?'AI':'사람';
  if($('turn-dot'))$('turn-dot').className=`turn-dot ${p.side_to_move==='first'?'blue':'red'}`;
- if($('turn-label'))$('turn-label').textContent=preview?`예상 수순 ${preview.actions.length}수`:placeMode==='place-red'?'빨간 성 배치 모드 · 판을 클릭하면 빨간 성이 놓여요':placeMode==='place-blue'?'파란 성 배치 모드 · 판을 클릭하면 파란 성이 놓여요':placeMode==='place-neutral'?'중립 성 배치 모드 · 판을 클릭하면 중립 성이 놓여요':p.result?`${p.result.winner==='first'?'파란':'빨간'} 성 승리 · ${p.result.reason==='siege'?'포위':'영토 점수'}`:`${p.side_to_move==='first'?'파란':'빨간'} 성 차례${controls.aiTurn(p)?' · AI 생각 중':''}`;
+ if($('turn-label'))$('turn-label').textContent=preview?`예상 수순 ${preview.actions.length}수`:placeMode==='place-red'?'빨간 성 배치 모드 · 판을 클릭하면 빨간 성이 놓여요':placeMode==='place-blue'?'파란 성 배치 모드 · 판을 클릭하면 파란 성이 놓여요':placeMode==='place-neutral'?'중립 성 배치 모드 · 판을 클릭하면 중립 성이 놓여요':p.result?`${p.result.winner==='first'?'파란':'빨간'} 성 승리 · ${p.result.reason==='siege'?'포위':p.result.reason==='pass_score'?'연속 패스 종국':'영토 점수'}`:`${p.previous_move_was_pass?`${p.side_to_move==='second'?'파란':'빨간'} 성 패스 · `:''}${p.side_to_move==='first'?'파란':'빨간'} 성 차례${controls.aiTurn(p)?' · AI 생각 중':''}`;
  if($('ply-label'))$('ply-label').textContent=`${node.ply}수째`;
  if($('nav-label'))$('nav-label').textContent=`${node.ply}수`;
  if($('first'))$('first').disabled=$('previous').disabled=node.parent===null;
