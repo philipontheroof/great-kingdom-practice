@@ -1,4 +1,4 @@
-import {lineThrough,redEvaluation} from './study.mjs';
+import {lineThrough,blueEvaluation} from './study.mjs';
 export function treeLayout(doc){
  const children=new Map(doc.nodes.map(n=>[n.id,[]]));for(const n of doc.nodes)if(n.parent!==null)children.get(n.parent).push(n);
  const placed=new Map();let row=0;
@@ -7,17 +7,17 @@ export function treeLayout(doc){
 }
 export function timelineSvg(doc,analysisFor,mode='win'){
  const l=treeLayout(doc),line=lineThrough(doc,doc.selected),selected=new Set(line.map(n=>n.id)),x=p=>54+p*70;
- const points=line.map(n=>({n,v:redEvaluation(analysisFor(n),doc.setup.komi)})),score=mode==='score';
+ const points=line.map(n=>({n,v:blueEvaluation(analysisFor(n),doc.setup.komi)})),score=mode==='score';
  const max=Math.max(10,...points.map(p=>Math.abs(p.v.margin??0))),value=p=>score?p.v.margin:p.v.win,y=v=>score?80-v/max*52:132-v*104;
- let svg=`<svg width="${l.width}" height="${l.height+205}" viewBox="0 0 ${l.width} ${l.height+205}" role="group" aria-label="선택 가지 평가와 수순 분기 트리"><line x1="34" x2="${l.width-20}" y1="80" y2="80" stroke="#d7dee6" stroke-dasharray="4 4"/><text x="12" y="32" class="axis-label" fill="#ee6338" font-weight="750">${score?`+${max.toFixed(0)}집`:'빨강'}</text><text x="12" y="84" class="axis-label" fill="#7a8795" font-weight="600">균형</text><text x="12" y="136" class="axis-label" fill="#4173e6" font-weight="750">${score?`-${max.toFixed(0)}집`:'파랑'}</text>`;
+ let svg=`<svg width="${l.width}" height="${l.height+205}" viewBox="0 0 ${l.width} ${l.height+205}" role="group" aria-label="선택 가지 평가와 수순 분기 트리"><line x1="34" x2="${l.width-20}" y1="80" y2="80" stroke="#d7dee6" stroke-dasharray="4 4"/><text x="12" y="32" class="axis-label" fill="#4173e6" font-weight="750">${score?`+${max.toFixed(0)}집`:'파랑'}</text><text x="12" y="84" class="axis-label" fill="#7a8795" font-weight="600">균형</text><text x="12" y="136" class="axis-label" fill="#ee6338" font-weight="750">${score?`-${max.toFixed(0)}집`:'빨강'}</text>`;
  let prev=null;for(const p of points){
   const v=value(p);
   if(v!==null){
    const currY=y(v);
-   const currColor=currY<79?'#ee6338':currY>81?'#4173e6':'#8a9ba8';
+   const currColor=currY<79?'#4173e6':currY>81?'#ee6338':'#8a9ba8';
    if(prev){
     const prevY=y(value(prev));
-    const lineColor=(currY<80&&prevY<80)?'#ee6338':(currY>80&&prevY>80)?'#4173e6':'#b0bec5';
+    const lineColor=(currY<80&&prevY<80)?'#4173e6':(currY>80&&prevY>80)?'#ee6338':'#b0bec5';
     svg+=`<line x1="${x(prev.n.ply)}" y1="${prevY}" x2="${x(p.n.ply)}" y2="${currY}" stroke="${lineColor}" stroke-width="2.5"/>`;
    }
    svg+=`<circle cx="${x(p.n.ply)}" cy="${currY}" r="4" fill="${currColor}" stroke="#ffffff" stroke-width="1.5"/>`;
@@ -30,17 +30,17 @@ export function timelineSvg(doc,analysisFor,mode='win'){
  for(const e of l.edges){const a=e.from,b=e.to;svg+=`<path d="M${a.x+23} ${a.y+211} C${a.x+36} ${a.y+211},${b.x-36} ${b.y+211},${b.x-23} ${b.y+211}" fill="none" stroke="${selected.has(b.id)?'#73918d':'#d8dfe6'}" stroke-width="${selected.has(b.id)?2:1.5}"/>`;}
  for(const n of l.nodes){
   const parent=doc.nodes.find(p=>p.id===n.parent);
-  const red=parent?.position?parent.position.side_to_move==='first':n.ply%2===1;
+  const blue=parent?.position?parent.position.side_to_move==='first':n.ply%2===1;
   const a=n.action;
   const coord = c => `${Math.floor(c/9)+1}·${c%9+1}`;
   let label, color;
   if(n.parent===null){ label='시작'; color='#e4e9ed'; }
-  else if(a===81){ label='패스'; color=red?'#ee6338':'#4173e6'; }
+  else if(a===81){ label='패스'; color=blue?'#4173e6':'#ee6338'; }
   else if(a>=400){ label='제거 '+coord(a-400); color='#64748b'; }
   else if(a>=300){ label='중립 '+coord(a-300); color='#94a3b8'; }
-  else if(a>=200){ label='파랑 '+coord(a-200); color='#4173e6'; }
-  else if(a>=100){ label='빨강 '+coord(a-100); color='#ee6338'; }
-  else { label=coord(a); color=red?'#ee6338':'#4173e6'; }
+  else if(a>=200){ label='빨강 '+coord(a-200); color='#ee6338'; }
+  else if(a>=100){ label='파랑 '+coord(a-100); color='#4173e6'; }
+  else { label=coord(a); color=blue?'#4173e6':'#ee6338'; }
 
   const rw = Math.max(46, label.length * 8.5 + 10);
   const rx = n.x - rw / 2;

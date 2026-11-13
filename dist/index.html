@@ -1,5 +1,5 @@
 <!doctype html>
-<html data-execution="local" lang="ko">
+<html lang="ko">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#172e45"><title>Great Kingdom · 연습실</title><link rel="icon" href="data:,"><link rel="stylesheet" href="./style.css?v=15"><script type="module" src="./app.mjs?v=15"></script></head>
 <body>
   <main>
@@ -30,15 +30,15 @@
           </div>
           <div class="players">
             <div class="player">
-              <span class="castle-mini red"></span>
-              <div class="player-info"><span id="red-player">나</span><small>빨간 성 · 선공</small></div>
-              <strong id="red-score">0<small>영토</small></strong>
+              <span class="castle-mini blue"></span>
+              <div class="player-info"><span id="blue-player">나</span><small>파란 성 · 선공</small></div>
+              <strong id="blue-score">0<small>영토</small></strong>
             </div>
             <span class="versus">vs</span>
-            <div class="player blue-side">
-              <strong id="blue-score">0<small>영토</small></strong>
-              <div class="player-info"><span id="blue-player">Champion</span><small>파란 성 · 후공</small></div>
-              <span class="castle-mini blue"></span>
+            <div class="player red-side">
+              <strong id="red-score">0<small>영토</small></strong>
+              <div class="player-info"><span id="red-player">Champion</span><small>빨간 성 · 후공</small></div>
+              <span class="castle-mini red"></span>
             </div>
           </div>
           <div class="placement-bar" role="toolbar" aria-label="착수 모드 및 성 배치">
@@ -46,8 +46,8 @@
               <span class="bar-label">배치 모드:</span>
               <div class="pill-group" role="radiogroup" aria-label="착수 모드">
                 <button type="button" id="mode-alternate" class="pill-btn active" aria-pressed="true" title="번갈아 가며 착수합니다">⚔️ 번갈아 착수</button>
-                <button type="button" id="mode-place-red" class="pill-btn pill-red" aria-pressed="false" title="판을 클릭하면 빨간 성을 배치합니다"><span class="dot-icon red"></span> 빨간 성</button>
                 <button type="button" id="mode-place-blue" class="pill-btn pill-blue" aria-pressed="false" title="판을 클릭하면 파란 성을 배치합니다"><span class="dot-icon blue"></span> 파란 성</button>
+                <button type="button" id="mode-place-red" class="pill-btn pill-red" aria-pressed="false" title="판을 클릭하면 빨간 성을 배치합니다"><span class="dot-icon red"></span> 빨간 성</button>
                 <button type="button" id="mode-place-neutral" class="pill-btn pill-neutral" aria-pressed="false" title="판을 클릭하면 중립 성을 배치합니다"><span class="dot-icon neutral"></span> 중립 성</button>
                 <button type="button" id="mode-remove" class="pill-btn pill-remove" aria-pressed="false" title="판의 성을 클릭하면 제거합니다">🗑️ 성 제거</button>
               </div>
@@ -56,21 +56,21 @@
             <div class="placement-group">
               <span class="bar-label">지금 둘 차례:</span>
               <div class="pill-group" role="group" aria-label="이번 턴 착수 순서">
-                <button type="button" id="turn-order-red" class="pill-btn pill-red active" title="빨간 성 차례입니다"><span class="dot-icon red"></span> 🔴 빨강</button>
-                <button type="button" id="turn-order-blue" class="pill-btn pill-blue" title="파란 성 차례입니다"><span class="dot-icon blue"></span> 🔵 파랑</button>
+                <button type="button" id="turn-order-blue" class="pill-btn pill-blue active" title="파란 성 차례입니다"><span class="dot-icon blue"></span> 🔵 파랑</button>
+                <button type="button" id="turn-order-red" class="pill-btn pill-red" title="빨간 성 차례입니다"><span class="dot-icon red"></span> 🔴 빨강</button>
               </div>
             </div>
           </div>
 
           <div class="board-stage">
-            <!-- Left: Winrate Vertical Bar (Red on top, Blue on bottom) -->
-            <div id="win-column" class="win-column" aria-label="빨간 성의 예상 승률" hidden>
-              <span class="win-end red">빨강<b id="red-percent">—</b></span>
+            <!-- Left: Winrate Vertical Bar (Blue on top, Red on bottom) -->
+            <div id="win-column" class="win-column" aria-label="파란 성의 예상 승률" hidden>
+              <span class="win-end blue">파랑<b id="blue-percent">—</b></span>
               <div class="vbar">
                 <div id="win-fill"></div>
                 <i class="vbar-mid"></i>
               </div>
-              <span class="win-end blue">파랑<b id="blue-percent">—</b></span>
+              <span class="win-end red">빨강<b id="red-percent">—</b></span>
               <strong id="win-value" class="win-value">—</strong>
             </div>
 
@@ -78,19 +78,19 @@
 
             <!-- Right: Expected Score Difference (집차이) Vertical Bar -->
             <div id="margin-column" class="margin-column" aria-label="예상 집차이" hidden>
-              <span class="margin-end red">빨강 우세<b id="margin-red-percent">—</b></span>
-              <div class="vbar margin-vbar">
-                <div id="margin-fill-red" class="mfill-red"></div>
-                <i class="vbar-mid"></i>
-                <div id="margin-fill-blue" class="mfill-blue"></div>
-              </div>
               <span class="margin-end blue">파랑 우세<b id="margin-blue-percent">—</b></span>
+              <div class="vbar margin-vbar">
+                <div id="margin-fill-blue" class="mfill-blue"></div>
+                <i class="vbar-mid"></i>
+                <div id="margin-fill-red" class="mfill-red"></div>
+              </div>
+              <span class="margin-end red">빨강 우세<b id="margin-red-percent">—</b></span>
               <strong id="margin-column-value" class="margin-column-value">—</strong>
             </div>
           </div>
 
           <div class="turn-strip">
-            <span id="turn-dot" class="turn-dot red"></span>
+            <span id="turn-dot" class="turn-dot blue"></span>
             <span id="turn-label">판을 준비하고 있어요</span>
             <span id="ply-label">시작 국면</span>
           </div>
@@ -104,8 +104,8 @@
             <button id="pass" class="quiet-button">패스</button>
           </div>
           <div class="board-legend">
-            <span><i class="swatch territory-red"></i>빨간 영토</span>
             <span><i class="swatch territory-blue"></i>파란 영토</span>
+            <span><i class="swatch territory-red"></i>빨간 영토</span>
             <span><i class="castle-mini neutral"></i>중립 성</span>
             <span id="preview-label" hidden>점선·숫자 = 예상 영역 확률 · 회색 = 미소유</span>
           </div>
@@ -243,8 +243,8 @@
             <label class="switch-row nested" id="once-auto-show-wrap"><input id="once-auto-show" type="checkbox" role="switch"><span>누르면 현재 국면 시각화도 켜기</span></label>
             <div class="field-label">이번 턴부터 계속 분석</div>
             <div class="pair">
-              <label class="switch-row side-red"><input id="continuous-first" type="checkbox" role="switch"><span>빨강 턴</span></label>
-              <label class="switch-row side-blue"><input id="continuous-second" type="checkbox" role="switch"><span>파랑 턴</span></label>
+              <label class="switch-row side-blue"><input id="continuous-first" type="checkbox" role="switch"><span>파랑 턴</span></label>
+              <label class="switch-row side-red"><input id="continuous-second" type="checkbox" role="switch"><span>빨강 턴</span></label>
             </div>
             <div class="field-label">최대 시간 or visit</div>
             <div class="segmented-small" id="analysis-limit-tabs">
@@ -379,23 +379,23 @@
           <summary><span class="group-no">4</span>착수 (AI 대국)</summary>
           <section class="settings-sub">
             <div class="play-help">AI 착수는 국면 트리의 <b>마지막 수(leaf)</b>에서만 발동됩니다. 과거 수를 볼 때는 두지 않아요.</div>
-            <div class="play-row side-red">
-              <label class="switch-row"><input id="play-first" type="checkbox" role="switch"><span>AI가 빨강 착수</span></label>
+            <div class="play-row side-blue">
+              <label class="switch-row"><input id="play-first" type="checkbox" role="switch"><span>AI가 파랑 착수</span></label>
               <div class="play-budget-control">
                 <span class="sub-label">탐색량:</span>
                 <div class="budget-compact">
-                  <input id="play-first-value" type="number" inputmode="decimal" aria-label="빨강 착수 탐색량" value="2.0">
-                  <select id="play-first-unit" aria-label="빨강 착수 단위"><option value="seconds">초</option><option value="visits">visits</option></select>
+                  <input id="play-first-value" type="number" inputmode="decimal" aria-label="파랑 착수 탐색량" value="2.0">
+                  <select id="play-first-unit" aria-label="파랑 착수 단위"><option value="seconds">초</option><option value="visits">visits</option></select>
                 </div>
               </div>
             </div>
-            <div class="play-row side-blue">
-              <label class="switch-row"><input id="play-second" type="checkbox" role="switch"><span>AI가 파랑 착수</span></label>
+            <div class="play-row side-red">
+              <label class="switch-row"><input id="play-second" type="checkbox" role="switch"><span>AI가 빨강 착수</span></label>
               <div class="play-budget-control">
                 <span class="sub-label">탐색량:</span>
                 <div class="budget-compact">
-                  <input id="play-second-value" type="number" inputmode="decimal" aria-label="파랑 착수 탐색량" value="2.0">
-                  <select id="play-second-unit" aria-label="파랑 착수 단위"><option value="seconds">초</option><option value="visits">visits</option></select>
+                  <input id="play-second-value" type="number" inputmode="decimal" aria-label="빨강 착수 탐색량" value="2.0">
+                  <select id="play-second-unit" aria-label="빨강 착수 단위"><option value="seconds">초</option><option value="visits">visits</option></select>
                 </div>
               </div>
             </div>
@@ -417,7 +417,7 @@
     <datalist id="second-presets"><option value="0.5"></option><option value="1"></option><option value="2"></option><option value="5"></option><option value="10"></option><option value="30"></option></datalist>
   </main>
 
-  <dialog id="new-dialog"><form id="new-form"><div class="dialog-heading"><div><p class="eyebrow">NEW PRACTICE</p><h2>새로운 한 판</h2></div><button type="button" id="new-close" class="icon-button" aria-label="닫기">×</button></div><p class="muted">AI 착수 색과 탐색량은 <b>설정</b>에서 정할 수 있어요.</p><label>중립 성<select id="neutral-setup"><option value="center">중앙</option><option value="none">없음</option><option value="custom">직접 위치 선택</option></select></label><div id="neutral-coordinates" class="coordinate-fields" hidden><label>행<input id="neutral-row" type="number" min="1" max="9" value="5"></label><label>열<input id="neutral-col" type="number" min="1" max="9" value="5"></label></div><label>파란 성의 덤<input id="komi" type="number" step="any" value="2.5"></label><button type="submit" class="primary-button full-width">대국 시작하기 →</button><div class="recent-heading">이 기기의 최근 연습</div><div id="recent-studies"></div></form></dialog>
+  <dialog id="new-dialog"><form id="new-form"><div class="dialog-heading"><div><p class="eyebrow">NEW PRACTICE</p><h2>새로운 한 판</h2></div><button type="button" id="new-close" class="icon-button" aria-label="닫기">×</button></div><p class="muted">AI 착수 색과 탐색량은 <b>설정</b>에서 정할 수 있어요.</p><label>중립 성<select id="neutral-setup"><option value="center">중앙</option><option value="none">없음</option><option value="custom">직접 위치 선택</option></select></label><div id="neutral-coordinates" class="coordinate-fields" hidden><label>행<input id="neutral-row" type="number" min="1" max="9" value="5"></label><label>열<input id="neutral-col" type="number" min="1" max="9" value="5"></label></div><label>빨간 성의 덤<input id="komi" type="number" step="any" value="2.5"></label><button type="submit" class="primary-button full-width">대국 시작하기 →</button><div class="recent-heading">이 기기의 최근 연습</div><div id="recent-studies"></div></form></dialog>
   <dialog id="confirm-dialog"><form method="dialog"><h2 id="confirm-title">확인</h2><p id="confirm-message"></p><div class="dialog-actions"><button value="cancel" id="confirm-cancel" class="quiet-button">취소</button><button value="ok" id="confirm-ok" class="primary-button">확인</button></div></form></dialog>
 </body>
 </html>

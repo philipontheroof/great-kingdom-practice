@@ -1,4 +1,4 @@
-import {newStudy,addNode,pathTo,lineThrough,importDocument,redEvaluation,studyForSave} from './study.mjs';
+import {newStudy,addNode,pathTo,lineThrough,importDocument,blueEvaluation,studyForSave} from './study.mjs';
 import {facts,stateGroups,territory,canonicalState,positionPayload} from './engine.mjs';
 import {boardSvg} from './board.mjs';
 import {STORE,persistStudy,retryAnalysis} from './client.mjs';
@@ -49,7 +49,7 @@ const coord=a=>a===81?'패스':`${Math.floor(a/9)+1}·${a%9+1}`;
 const pct=v=>typeof v==='number'?`${(v*100).toFixed(1)}%`:'—';
 const signed=v=>typeof v==='number'?`${v>0?'+':''}${v.toFixed(1)}`:'—';
 const sourceLabel=s=>({network:'모델 원평가',mcts:'MCTS 탐색',tactical:'전술 증명',rule:'규칙 판정'}[s]||'분석 전');
-const sideName=s=>s==='first'?'빨강':'파랑';
+const sideName=s=>s==='first'?'파랑':'빨강';
 function notice(message,error=false){if(!$('notice'))return;$('notice').textContent=message;$('notice').classList.toggle('error',error);$('notice').hidden=!message;}
 async function api(path,payload,signal){if(staticOnly)throw Error('이 배포본은 모든 대국과 분석을 기기에서 실행합니다.');const response=await fetch(`/api/v1/${path}`,payload===undefined?{signal}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload),signal});const data=await response.json();if(!response.ok)throw Object.assign(Error(data.error||'실행부 요청 실패'),{status:response.status});return data;}
 function library(){const v=JSON.parse(localStorage.getItem(STORE)||'[]');if(!Array.isArray(v))throw Error('저장 목록을 읽을 수 없어요.');return v;}
@@ -197,8 +197,8 @@ async function finalizePosition(payload){
 async function handleBoardClick(cell){
  const node=active();if(!node?.position)return;
  if(placeMode==='alternate'){await place(cell);return;}
- if(placeMode==='place-red'){await place(100+cell);return;}
- if(placeMode==='place-blue'){await place(200+cell);return;}
+ if(placeMode==='place-blue'){await place(100+cell);return;}
+ if(placeMode==='place-red'){await place(200+cell);return;}
  if(placeMode==='place-neutral'){await place(300+cell);return;}
  if(placeMode==='remove'){
   if(node.position.board[cell]===0){notice('제거할 성이 없습니다.',true);return;}
@@ -284,16 +284,16 @@ function renderPlacementBar(){
  $('mode-remove')?.classList?.toggle?.('active',placeMode==='remove');
  $('mode-remove')?.setAttribute?.('aria-pressed',String(placeMode==='remove'));
 
- const rBtn=$('turn-order-red'),bBtn=$('turn-order-blue');
- if(rBtn){
-  rBtn.classList?.toggle?.('active',side==='first');
-  rBtn.classList?.toggle?.('side-red',side==='first');
-  rBtn.setAttribute?.('aria-pressed',String(side==='first'));
- }
+ const bBtn=$('turn-order-blue'),rBtn=$('turn-order-red');
  if(bBtn){
-  bBtn.classList?.toggle?.('active',side==='second');
-  bBtn.classList?.toggle?.('side-blue',side==='second');
-  bBtn.setAttribute?.('aria-pressed',String(side==='second'));
+  bBtn.classList?.toggle?.('active',side==='first');
+  bBtn.classList?.toggle?.('side-blue',side==='first');
+  bBtn.setAttribute?.('aria-pressed',String(side==='first'));
+ }
+ if(rBtn){
+  rBtn.classList?.toggle?.('active',side==='second');
+  rBtn.classList?.toggle?.('side-red',side==='second');
+  rBtn.setAttribute?.('aria-pressed',String(side==='second'));
  }
 }
 function renderBoard(){
@@ -314,12 +314,12 @@ function renderBoard(){
   }
   boardEl.setAttribute('aria-busy',String(moving));
  }
- if($('red-score'))$('red-score').innerHTML=`${p.score.red}<small>영토</small>`;
  if($('blue-score'))$('blue-score').innerHTML=`${p.score.blue}<small>영토</small>`;
- if($('red-player'))$('red-player').textContent=controls.aiSide.first?'AI':'사람';
- if($('blue-player'))$('blue-player').textContent=controls.aiSide.second?'AI':'사람';
- if($('turn-dot'))$('turn-dot').className=`turn-dot ${p.side_to_move==='first'?'red':'blue'}`;
- if($('turn-label'))$('turn-label').textContent=preview?`예상 수순 ${preview.actions.length}수`:placeMode==='place-red'?'빨간 성 배치 모드 · 판을 클릭하면 빨간 성이 놓여요':placeMode==='place-blue'?'파란 성 배치 모드 · 판을 클릭하면 파란 성이 놓여요':placeMode==='place-neutral'?'중립 성 배치 모드 · 판을 클릭하면 중립 성이 놓여요':p.result?`${p.result.winner==='first'?'빨간':'파란'} 성 승리 · ${p.result.reason==='siege'?'포위':'영토 점수'}`:`${p.side_to_move==='first'?'빨간':'파란'} 성 차례${controls.aiTurn(p)?' · AI 생각 중':''}`;
+ if($('red-score'))$('red-score').innerHTML=`${p.score.red}<small>영토</small>`;
+ if($('blue-player'))$('blue-player').textContent=controls.aiSide.first?'AI':'사람';
+ if($('red-player'))$('red-player').textContent=controls.aiSide.second?'AI':'사람';
+ if($('turn-dot'))$('turn-dot').className=`turn-dot ${p.side_to_move==='first'?'blue':'red'}`;
+ if($('turn-label'))$('turn-label').textContent=preview?`예상 수순 ${preview.actions.length}수`:placeMode==='place-red'?'빨간 성 배치 모드 · 판을 클릭하면 빨간 성이 놓여요':placeMode==='place-blue'?'파란 성 배치 모드 · 판을 클릭하면 파란 성이 놓여요':placeMode==='place-neutral'?'중립 성 배치 모드 · 판을 클릭하면 중립 성이 놓여요':p.result?`${p.result.winner==='first'?'파란':'빨간'} 성 승리 · ${p.result.reason==='siege'?'포위':'영토 점수'}`:`${p.side_to_move==='first'?'파란':'빨간'} 성 차례${controls.aiTurn(p)?' · AI 생각 중':''}`;
  if($('ply-label'))$('ply-label').textContent=`${node.ply}수째`;
  if($('nav-label'))$('nav-label').textContent=`${node.ply}수`;
  if($('first'))$('first').disabled=$('previous').disabled=node.parent===null;
@@ -328,13 +328,13 @@ function renderBoard(){
  if($('preview-exit'))$('preview-exit').hidden=!preview;
  if($('preview-label'))$('preview-label').hidden=!(settings.layers.ownership&&visible);
 
- // Left: Winrate vertical bar (Red on top, Blue on bottom)
- const values=redEvaluation(visible,doc.setup.komi);
+ // Left: Winrate vertical bar (Blue on top, Red on bottom)
+ const values=blueEvaluation(visible,doc.setup.komi);
  if($('win-column'))$('win-column').hidden=!L.win;
  if($('win-value'))$('win-value').textContent=pct(values.win);
  if($('win-summary-value'))$('win-summary-value').textContent=pct(values.win);
- if($('red-percent'))$('red-percent').textContent=pct(values.win);
- if($('blue-percent'))$('blue-percent').textContent=pct(values.win===null?null:1-values.win);
+ if($('blue-percent'))$('blue-percent').textContent=pct(values.win);
+ if($('red-percent'))$('red-percent').textContent=pct(values.win===null?null:1-values.win);
  if($('win-fill'))$('win-fill').style.height=values.win===null?'0%':`${values.win*100}%`;
 
  // Right: Expected score difference (집차이) vertical bar
@@ -342,36 +342,36 @@ function renderBoard(){
  if(values.margin!==null&&values.margin!==undefined){
   const m=values.margin;
   if(m>=0){
-   if($('margin-red-percent'))$('margin-red-percent').textContent=`+${m.toFixed(1)}집`;
-   if($('margin-blue-percent'))$('margin-blue-percent').textContent='—';
-   if($('margin-fill-red'))$('margin-fill-red').style.height=`${Math.min(100,(m/15)*50)}%`;
-   if($('margin-fill-blue'))$('margin-fill-blue').style.height='0%';
-   if($('margin-column-value')){$('margin-column-value').textContent=`+${m.toFixed(1)}집`;$('margin-column-value').style.color='#ee6338';}
-  }else{
+   if($('margin-blue-percent'))$('margin-blue-percent').textContent=`+${m.toFixed(1)}집`;
    if($('margin-red-percent'))$('margin-red-percent').textContent='—';
-   if($('margin-blue-percent'))$('margin-blue-percent').textContent=`+${(-m).toFixed(1)}집`;
+   if($('margin-fill-blue'))$('margin-fill-blue').style.height=`${Math.min(100,(m/15)*50)}%`;
    if($('margin-fill-red'))$('margin-fill-red').style.height='0%';
-   if($('margin-fill-blue'))$('margin-fill-blue').style.height=`${Math.min(100,((-m)/15)*50)}%`;
-   if($('margin-column-value')){$('margin-column-value').textContent=`${m.toFixed(1)}집`;$('margin-column-value').style.color='#4173e6';}
+   if($('margin-column-value')){$('margin-column-value').textContent=`+${m.toFixed(1)}집`;$('margin-column-value').style.color='#4173e6';}
+  }else{
+   if($('margin-blue-percent'))$('margin-blue-percent').textContent='—';
+   if($('margin-red-percent'))$('margin-red-percent').textContent=`+${(-m).toFixed(1)}집`;
+   if($('margin-fill-blue'))$('margin-fill-blue').style.height='0%';
+   if($('margin-fill-red'))$('margin-fill-red').style.height=`${Math.min(100,((-m)/15)*50)}%`;
+   if($('margin-column-value')){$('margin-column-value').textContent=`${m.toFixed(1)}집`;$('margin-column-value').style.color='#ee6338';}
   }
  }else{
-  if($('margin-red-percent'))$('margin-red-percent').textContent='—';
   if($('margin-blue-percent'))$('margin-blue-percent').textContent='—';
-  if($('margin-fill-red'))$('margin-fill-red').style.height='0%';
+  if($('margin-red-percent'))$('margin-red-percent').textContent='—';
   if($('margin-fill-blue'))$('margin-fill-blue').style.height='0%';
+  if($('margin-fill-red'))$('margin-fill-red').style.height='0%';
   if($('margin-column-value')){$('margin-column-value').textContent='—';$('margin-column-value').style.color='var(--ink)';}
  }
 }
 function renderAnalysis(){
- const analysis=visibleAnalysis(),values=redEvaluation(analysis,doc.setup.komi),L=settings.layers;
+ const analysis=visibleAnalysis(),values=blueEvaluation(analysis,doc.setup.komi),L=settings.layers;
  if($('analysis-source'))$('analysis-source').textContent=analysis?sourceLabel(analysis.source):'분석 전';
  if($('result-empty'))$('result-empty').hidden=Boolean(analysis);
  if($('result-body'))$('result-body').hidden=!analysis;
  if($('result-empty'))$('result-empty').textContent=!doc.model_id?'모델이 연결되지 않았어요. 양쪽 성을 직접 두며 국면을 살펴볼 수 있어요.':active().position.result?'대국이 종료되었어요. 이전 수로 돌아가 새 가지를 만들어 보세요.':'이 국면은 아직 분석 전이에요. [현재 국면 분석]을 누르거나 [📌 분석 고정]을 켜면 바로 분석돼요.';
  if($('win-column'))$('win-column').hidden=!L.win;
  if($('win-value'))$('win-value').textContent=pct(values.win);
- if($('red-percent'))$('red-percent').textContent=pct(values.win);
- if($('blue-percent'))$('blue-percent').textContent=pct(values.win===null?null:1-values.win);
+ if($('blue-percent'))$('blue-percent').textContent=pct(values.win);
+ if($('red-percent'))$('red-percent').textContent=pct(values.win===null?null:1-values.win);
  if($('win-fill'))$('win-fill').style.height=values.win===null?'0%':`${values.win*100}%`;
  if($('margin-box'))$('margin-box').hidden=!L.margin;
  if($('margin-caption'))$('margin-caption').textContent=analysis?.source==='rule'?'종국 영토 차이':'예상 집차이';
@@ -398,8 +398,8 @@ function renderAnalysis(){
   if(!pv.length){const span=document.createElement('span');span.className='muted';span.textContent=analysis?'이 국면의 예상 수순이 없어요.':'분석 후 확인할 수 있어요.';$('pv').append(span);}
   pv.slice(0,16).forEach((action,i)=>{
    const button=document.createElement('button');
-   const red=(analysis.perspective==='first')===(i%2===0);
-   button.innerHTML=`<i class="castle-mini ${red?'red':'blue'}"></i>${coord(action)}`;
+   const blue=(analysis.perspective==='first')===(i%2===0);
+   button.innerHTML=`<i class="castle-mini ${blue?'blue':'red'}"></i>${coord(action)}`;
    button.setAttribute('aria-label',`예상 ${i+1}수까지 보기`);
    button.addEventListener('click',()=>run(()=>previewPV(i+1)));
    $('pv').append(button);
@@ -410,7 +410,7 @@ function renderAnalysis(){
   const model=analysis.model;
   const text=[`출처: ${sourceLabel(analysis.source)}`,`모델 원승률: ${pct(values.rawWin)}`,`예상 영토 차이(덤 전): ${signed(values.rawScore)}`,`탐색 시간: ${(analysis.cumulative_elapsed_seconds??analysis.mcts.elapsed_seconds).toFixed(3)}초`,
    `모델 SHA: ${model?.sha256?.slice(0,16)||'규칙 판정'}`,`국면: ${analysis.state_id.slice(0,16)}`,`실행: ${analysis.provider||analysis.execution||analysis.backend} · 규칙 ${analysis.position.ruleset_version}`,`전술 상태: ${analysis.exact?.status||'없음'} · 위협 ${(analysis.exact?.threats||[]).map(coord).join(', ')||'없음'}`,`정책 엔트로피: ${(-(analysis.raw_network?.policy||[]).reduce((sum,p)=>sum+(p>0?p*Math.log(p):0),0)).toFixed(3)}`,
-   ...(analysis.proven_winner?[`증명된 승자: ${analysis.proven_winner==='first'?'빨간 성':'파란 성'}`]:[])];
+   ...(analysis.proven_winner?[`증명된 승자: ${analysis.proven_winner==='first'?'파란 성':'빨간 성'}`]:[])];
   if($('more-metrics'))$('more-metrics').replaceChildren(...text.map(t=>{const div=document.createElement('div');div.textContent=t;return div;}));
   const dist=analysis.raw_network?.score_distribution||[],max=Math.max(...dist,0.00001),step=300/Math.max(dist.length,1);
   if($('score-distribution'))$('score-distribution').innerHTML=dist.length?`<svg class="distribution-svg" viewBox="0 0 300 50" role="img" aria-label="현재 둘 차례 관점의 예상 영토 차이 분포">${dist.map((p,i)=>`<rect x="${i*step}" y="${48-p/max*42}" width="${Math.max(.3,step*.85)}" height="${p/max*42}" fill="#809caa"/>`).join('')}</svg>`:'';
@@ -634,8 +634,8 @@ $('mode-place-red')?.addEventListener('click',()=>setPlaceMode(placeMode==='plac
 $('mode-place-blue')?.addEventListener('click',()=>setPlaceMode(placeMode==='place-blue'?'alternate':'place-blue'));
 $('mode-place-neutral')?.addEventListener('click',()=>setPlaceMode(placeMode==='place-neutral'?'alternate':'place-neutral'));
 $('mode-remove')?.addEventListener('click',()=>setPlaceMode(placeMode==='remove'?'alternate':'remove'));
-$('turn-order-red')?.addEventListener('click',()=>run(()=>setTurnSide('first')));
-$('turn-order-blue')?.addEventListener('click',()=>run(()=>setTurnSide('second')));
+$('turn-order-blue')?.addEventListener('click',()=>run(()=>setTurnSide('first')));
+$('turn-order-red')?.addEventListener('click',()=>run(()=>setTurnSide('second')));
 $('analyze-button')?.addEventListener('click',()=>{
  if(analyzing){if(analysisKind==='ai')controls.playing=false;cancel();render();return;}
  const n=active();if(!n)return;

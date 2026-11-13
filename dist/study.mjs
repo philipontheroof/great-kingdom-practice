@@ -72,11 +72,12 @@ export function studyForSave(doc) {
 
 export const requestKey=(node,model,visits,seconds)=>JSON.stringify([node,model,visits,seconds]);
 
-export function redEvaluation(analysis,komi) {
+export function blueEvaluation(analysis,komi) {
   if(!analysis)return {rawWin:null,win:null,rawScore:null,margin:null};
   const first=analysis.perspective==='first',raw=analysis.raw_network;
   const orient=p=>typeof p==='number'?(first?p:1-p):null;
   const rawScore=typeof raw?.expected_score==='number'?(first?1:-1)*raw.expected_score:null;
+  const ruleMargin=analysis.position?.score?.blue_margin??(analysis.position?.score?analysis.position.score.blue-analysis.position.score.red-komi:null);
   return {rawWin:orient(raw?.win_probability),win:orient(analysis.mcts?.root_win_probability),
-    rawScore,margin:analysis.source==='rule'&&analysis.position?.result?analysis.position.score.red_margin:rawScore===null?null:rawScore-komi};
+    rawScore,margin:analysis.source==='rule'&&analysis.position?.result?ruleMargin:rawScore===null?null:rawScore-komi};
 }
