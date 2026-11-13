@@ -27,9 +27,10 @@ export class BrowserSearch {
     const evalValue=t.status==='proven_loss'?-1:raw.value;
     return {state,visits:0,value:0,evalValue,expectedScore:Number.isFinite(raw.expected_score)?raw.expected_score:null,edges,tactical:t,provenWinner:winner,expanded:true};
   }
-  async _simulate(node){
+  async _simulate(node,stopped=()=>false){
+    if(stopped())return null;
     if(node.state.result){node.provenWinner=node.state.result.winner;const value=winnerValue(node.state,node.state.result.winner);node.visits++;node.value+=value;return value;}
-    if(!node.expanded){Object.assign(node,await this._expand(node.state));node.visits++;node.value+=node.evalValue;return node.evalValue;}
+    if(!node.expanded){const expanded=await this._expand(node.state);if(stopped())return null;Object.assign(node,expanded);node.visits++;node.value+=node.evalValue;return node.evalValue;}
     const parentN=Math.max(1,node.visits),sqrt=Math.sqrt(parentN);let best=null,bestScore=-Infinity;
     for(const edge of node.edges){
       const q=edge.child?.provenWinner?winnerValue(node.state,edge.child.provenWinner):(edge.visits?edge.value/edge.visits:0);
@@ -38,7 +39,8 @@ export class BrowserSearch {
     }
     if(!best)return node.evalValue;
     if(!best.child){const childState=playAction(node.state,best.action);best.child={state:childState,visits:0,value:0,evalValue:0,expectedScore:null,edges:null,expanded:false,provenWinner:null};}
-    const child=best.child,childValue=await this._simulate(child);
+    const child=best.child,childValue=await this._simulate(child,stopped);
+    if(childValue===null||stopped())return null;
     const parentValue=child.state.side_to_move===node.state.side_to_move?childValue:-childValue;
     if(best.expectedScore===null&&child.expectedScore!==null)best.expectedScore=child.state.side_to_move===node.state.side_to_move?child.expectedScore:-child.expectedScore;
     best.visits++;best.value+=parentValue;node.visits++;node.value+=parentValue;
@@ -47,10 +49,12 @@ export class BrowserSearch {
   async advance(visits,{deadline=Infinity,stopped=()=>false}={}){
     if(!Number.isInteger(visits)||visits<0)throw new RangeError('visits must be a non-negative integer');
     if(this.state.result)return this.snapshot();
-    if(!this.root){this.root={state:this.state,visits:0,value:0,evalValue:0,expectedScore:null,edges:null,expanded:false,provenWinner:null};Object.assign(this.root,await this._expand(this.state));this.exact=this.root.tactical;this.source=this.exact.status==='immediate_win'?'tactical':'network';}
+    if(!this.root){const root={state:this.state,visits:0,value:0,evalValue:0,expectedScore:null,edges:null,expanded:false,provenWinner:null};Object.assign(root,await this._expand(this.state));if(stopped())return this.snapshot();this.root=root;this.exact=this.root.tactical;this.source=this.exact.status==='immediate_win'?'tactical':'network';}
     const target=this.rootVisits+visits;
     while(this.rootVisits<target&&now()<deadline&&!stopped()){
-      await this._simulate(this.root);this.rootVisits++;
+      const v=await this._simulate(this.root,stopped);
+      if(v===null)break;
+      this.rootVisits=this.root.visits;
     }
     if(this.rootVisits&&this.exact?.status!=='immediate_win')this.source='mcts';
     return this.snapshot();
@@ -72,11 +76,11 @@ export class BrowserSearch {
   snapshot(){
     if(this.state.result){const win=this.state.result.winner===this.state.side_to_move?1:0;return {source:'rule',proven_winner:this.state.result.winner,exact:{source:'rule',status:'terminal',proven_winner:this.state.result.winner,threats:[]},recommended_action:null,mcts:{root_visits:0,root_win_probability:win,candidates:[],principal_variation:[],elapsed_seconds:0}};}
     if(!this.root)return {source:this.source,proven_winner:null,exact:null,recommended_action:null,mcts:{root_visits:0,root_win_probability:null,candidates:[],principal_variation:[],elapsed_seconds:(now()-this.started)/1000}};
-    const edges=this.root.edges||[],ordered=[...edges].sort((a,b)=>b.visits-a.visits||a.action-b.action),n=this.rootVisits;
-    const candidates=ordered.map(e=>({action:e.action,prior:e.prior,visits:e.visits,visit_share:n?e.visits/n:0,q:e.child?.provenWinner?winnerValue(this.state,e.child.provenWinner):e.visits?e.value/e.visits:null,win_probability:(e.child?.provenWinner||e.visits)?((e.child?.provenWinner?winnerValue(this.state,e.child.provenWinner):e.value/e.visits)+1)/2:null,expected_score:e.visits?e.expectedScore??null:null}));
+    const edges=this.root.edges||[],ordered=[...edges].sort((a,b)=>b.visits-a.visits||a.action-b.action),n=this.root.visits;
+    const candidates=ordered.map(e=>{const q=e.child?.provenWinner?winnerValue(this.state,e.child.provenWinner):e.visits?Math.max(-1,Math.min(1,e.value/e.visits)):null;return {action:e.action,prior:e.prior,visits:e.visits,visit_share:n?e.visits/n:0,q,win_probability:q!==null?(q+1)/2:null,expected_score:e.visits?e.expectedScore??null:null};});
     let pv=[],node=this.root;for(let i=0;i<40&&node?.edges?.length;i++){const edge=[...node.edges].sort((a,b)=>b.visits-a.visits||a.action-b.action)[0];if(!edge||!edge.visits)break;pv.push(edge.action);node=edge.child;}
     const winner=this.root.provenWinner??null;
-    const chosen=candidates.find(c=>c.visits)||candidates[0];const rootEstimate=n?this.root.value/n:this.root.evalValue;
+    const chosen=candidates.find(c=>c.visits)||candidates[0];const rootEstimate=Math.max(-1,Math.min(1,n?this.root.value/n:this.root.evalValue));
     return {source:this.source,proven_winner:winner,exact:{source:winner?'tactical':null,status:this.exact?.status??null,proven_winner:winner,threats:this.exact?.threats??[]},recommended_action:chosen?.action??null,mcts:{root_visits:n,root_win_probability:(rootEstimate+1)/2,candidates,principal_variation:pv,elapsed_seconds:(now()-this.started)/1000}};
   }
 }
