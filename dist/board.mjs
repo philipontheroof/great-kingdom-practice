@@ -19,7 +19,7 @@ export function boardSvg(position,{actions=[],lastAction=null,analysis=null,show
     else nums.set(a,i+1);
   });
   const lastCell=(lastAction===null||lastAction===81)?null:(lastAction>=400?null:(lastAction>=100?(lastAction%100):lastAction));
-  const candidates=(analysis?.mcts?.candidates||[]).filter(c=>c.action!==81).slice(0,8);
+  const candidates=(analysis?.mcts?.candidates||[]).filter(c=>c.action!==81&&c.visits>0).slice(0,8);
   const ranks=new Map(candidates.map((c,i)=>[c.action,{...c,rank:i+1}]));
   const pvMap=new Map();
   if(showPV&&analysis?.mcts?.principal_variation?.length){
