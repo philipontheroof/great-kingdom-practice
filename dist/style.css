@@ -233,8 +233,10 @@ svg.placing-remove .board-cell{cursor:crosshair!important}
 
 /* Responsive & Mobile Layout Hardening */
 main{width:100%;max-width:1320px}
-.timeline-panel{overflow:hidden;max-width:100%}
-.timeline-scroll{width:100%;max-width:100%;overflow:auto;-webkit-overflow-scrolling:touch;touch-action:pan-x pan-y}
+.workspace-layout,.main-column,.panel,.board-panel,.analysis-result-panel,.timeline-panel{width:100%;max-width:100%;min-width:0}
+.toolbar-actions{flex-wrap:wrap;max-width:100%}
+.timeline-panel{contain:inline-size;overflow:hidden}
+.timeline-scroll{display:block;width:100%;max-width:100%;min-width:0;overflow:auto;-webkit-overflow-scrolling:touch;touch-action:pan-x pan-y}
 @media(max-width:740px){
   .board-wrap{max-width:100%}
   .placement-bar{padding:6px 8px;gap:6px}
