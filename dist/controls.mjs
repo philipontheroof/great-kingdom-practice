@@ -2,6 +2,8 @@ import {lineThrough} from './study.mjs';
 
 export const BUDGET_RANGE={visits:{min:1,max:10_000_000},seconds:{min:.1,max:3600}};
 export const BUDGET_DEFAULT={visits:1600,seconds:5};
+export const TEMPERATURE_RANGE={min:0,max:2};
+export const TEMPERATURE_DEFAULT=0.4;
 
 export class PracticeControls {
  constructor(){
@@ -80,4 +82,35 @@ export function missingNodes(doc,scope='branch',backend=null,target='missing'){
  const nodes=scope==='all'?doc.nodes:lineThrough(doc,doc.selected);
  if(target==='all')return nodes;
  return nodes.filter(n=>!n.analysis||(n.analysis.model&&n.analysis.model.id!==doc.model_id)||(backend&&n.analysis.backend!==backend));
+}
+
+export function normalizeTemperature(value,{fallback=TEMPERATURE_DEFAULT}={}){
+ const n=Number(value);
+ if(!Number.isFinite(n))return fallback;
+ const clamped=Math.min(TEMPERATURE_RANGE.max,Math.max(TEMPERATURE_RANGE.min,n));
+ return Math.round(clamped*10)/10;
+}
+
+export function pickAiAction(result,temperature=0,rng=Math.random){
+ const bestAction=result?.recommended_action??null;
+ if(bestAction===null)return null;
+ const temp=normalizeTemperature(temperature,{fallback:0});
+ if(temp<=0||result?.source==='tactical'||result?.proven_winner)return bestAction;
+ const visited=(result?.mcts?.candidates||[]).filter(c=>c&&c.visits>0);
+ if(visited.length<=1)return bestAction;
+ if(visited.some(c=>c.q===1))return bestAction;
+ const nonLosing=visited.filter(c=>c.q!==-1);
+ const pool=nonLosing.length?nonLosing:visited;
+ if(pool.length<=1)return pool[0].action;
+ const maxVisits=Math.max(...pool.map(c=>c.visits));
+ const invTemp=1/temp;
+ const weights=pool.map(c=>Math.pow(c.visits/maxVisits,invTemp));
+ const total=weights.reduce((a,b)=>a+b,0);
+ if(!Number.isFinite(total)||total<=0)return bestAction;
+ let r=rng()*total;
+ for(let i=0;i<pool.length;i++){
+   r-=weights[i];
+   if(r<=0)return pool[i].action;
+ }
+ return pool[pool.length-1].action;
 }

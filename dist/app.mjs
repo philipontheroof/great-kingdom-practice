@@ -2,7 +2,7 @@ import {newStudy,addNode,pathTo,lineThrough,importDocument,blueEvaluation,studyF
 import {facts,stateGroups,territory,canonicalState,positionPayload} from './engine.mjs';
 import {boardSvg} from './board.mjs';
 import {STORE,persistStudy,retryAnalysis} from './client.mjs';
-import {PracticeControls,missingNodes,normalizeBudget,analysisFloor,budgetPayload,budgetReached,budgetLabel,BUDGET_RANGE,BUDGET_DEFAULT} from './controls.mjs';
+import {PracticeControls,missingNodes,normalizeBudget,analysisFloor,budgetPayload,budgetReached,budgetLabel,BUDGET_RANGE,BUDGET_DEFAULT,TEMPERATURE_DEFAULT,normalizeTemperature,pickAiAction} from './controls.mjs';
 import {timelineSvg} from './timeline.mjs';
 import {LocalEngine} from './local-client.mjs';
 import {loadStaticConfig,loadStaticManifest} from './deployment.mjs?v=2';
@@ -17,6 +17,7 @@ const settings={
  layers:{ownership:true,policy:true,win:true,margin:true,pv:true},
  pins:{ownership:true,policy:true,win:true,margin:true,pv:true,territory:true,numbers:true},
  play:{first:{unit:'seconds',value:2.0},second:{unit:'seconds',value:2.0}},
+ playTemperature:TEMPERATURE_DEFAULT,
  ponder:true,
  territory:true,numbers:true,
  batch:{scope:'branch',target:'missing',budget:{unit:'seconds',value:1.0}},
@@ -73,6 +74,7 @@ function loadSettings(){
   for(const k of Object.keys(settings.pins))if(typeof saved.pins[k]==='boolean')settings.pins[k]=saved.pins[k];
  }
  for(const s of SIDES)if(saved.play?.[s])settings.play[s]=normalizeBudget(saved.play[s],{fallback:'seconds'});
+ if('playTemperature' in saved)settings.playTemperature=normalizeTemperature(saved.playTemperature,{fallback:TEMPERATURE_DEFAULT});
  for(const k of ['territory','numbers','ponder'])if(typeof saved[k]==='boolean')settings[k]=saved[k];
  if(['branch','all'].includes(saved.batch?.scope))settings.batch.scope=saved.batch.scope;
  if(['missing','all'].includes(saved.batch?.target))settings.batch.target=saved.batch.target;
@@ -227,7 +229,8 @@ async function startAnalysis({ai=false,kind=ai?'ai':'once'}={}){
  if(!valid())return;if(!ponder){acceptResult(result,node,model,execution);notice('');}
  }catch(error){if(error.name!=='AbortError'&&valid()&&!ponder)notice(error.message,true);return;}
  finally{analyzing=false;analysisKind=null;analysisController=null;if(valid()){if(!ponder)render();else renderSettings();}}
- if(ai&&valid()&&isLeafNode(doc,node.id)&&controls.aiTurn(node.position)&&result?.recommended_action!==null&&result?.recommended_action!==undefined){await place(result.recommended_action,true);}
+ const aiAction=ai?pickAiAction(result,settings.playTemperature):null;
+ if(ai&&valid()&&isLeafNode(doc,node.id)&&controls.aiTurn(node.position)&&aiAction!==null&&aiAction!==undefined){await place(aiAction,true);}
 }
 function schedule(){
  const n=active();if(!n)return;if(n.position.result){render();return;}
@@ -510,6 +513,8 @@ function renderSettings(){
    if(pUnit)pUnit.value=settings.play[s].unit;
    if(pVal&&document.activeElement!==pVal)pVal.value=String(settings.play[s].value);
  }
+ const tVal=$('play-temperature');
+ if(tVal&&document.activeElement!==tVal)tVal.value=String(settings.playTemperature);
  setSwitch('play-ponder',settings.ponder);
  const isLeaf=isLeafNode(doc,node?.id);
  const who=SIDES.filter(s=>controls.aiSide[s]).map(sideName).join('·');
@@ -773,6 +778,7 @@ for(const s of SIDES){
  $(`play-${s}-unit`)?.addEventListener('change',budgetChanged);$(`play-${s}-value`)?.addEventListener('change',budgetChanged);
 }
 $('ai-resume')?.addEventListener('click',()=>{cancel();render();schedule();});
+$('play-temperature')?.addEventListener('change',()=>{settings.playTemperature=normalizeTemperature($('play-temperature').value,{fallback:TEMPERATURE_DEFAULT});saveSettings();render();});
 $('play-ponder')?.addEventListener('change',e=>{settings.ponder=e.target.checked;saveSettings();if(!settings.ponder&&analysisKind==='ponder')cancel();render();if(settings.ponder)schedule();});
 $('ai-seconds')?.addEventListener('change',()=>{
  const val=Number($('ai-seconds').value);

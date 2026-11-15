@@ -399,6 +399,15 @@
                 </div>
               </div>
             </div>
+            <div class="play-row">
+              <div class="play-budget-control" style="margin-top:0">
+                <span class="sub-label">수 다양성 (Temperature)</span>
+                <div class="budget-compact">
+                  <input id="play-temperature" type="number" inputmode="decimal" min="0" max="2" step="0.1" aria-label="AI 착수 Temperature" value="0.4">
+                </div>
+              </div>
+              <span class="hint">0이면 항상 최선수, 높을수록 다양한 수를 둡니다 (즉시 승패 수 제외).</span>
+            </div>
             <div class="play-status">
               <span id="play-status" class="hint">AI 착수 꺼짐 · 양쪽을 직접 둡니다</span>
               <button id="ai-resume" class="text-button" hidden>AI 착수 재개</button>
