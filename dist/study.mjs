@@ -18,16 +18,79 @@ export function pathTo(doc,id) {
   return path.reverse();
 }
 
-export function lineThrough(doc,id) {
+export function branchLeaves(doc) {
+  const parents=new Set(doc.nodes.map(n=>n.parent).filter(p=>p!==null));
+  return doc.nodes.filter(n=>!parents.has(n.id));
+}
+
+export function isAncestor(doc,ancestorId,descendantId) {
+  if(!ancestorId||!descendantId)return false;
+  if(ancestorId===descendantId)return true;
+  const map=new Map(doc.nodes.map(n=>[n.id,n]));
+  let node=map.get(descendantId);
+  const seen=new Set();
+  while(node&&node.parent!==null){
+    if(seen.has(node.id))return false;
+    seen.add(node.id);
+    if(node.parent===ancestorId)return true;
+    node=map.get(node.parent);
+  }
+  return false;
+}
+
+export function latestLeafUnder(doc,nodeId) {
+  const map=new Map(doc.nodes.map(n=>[n.id,n]));
+  if(!map.has(nodeId))throw Error('선택한 국면이 없습니다.');
+  const children=new Map(doc.nodes.map(n=>[n.id,[]]));
+  const indexMap=new Map(doc.nodes.map((n,i)=>[n.id,i]));
+  for(const n of doc.nodes)if(n.parent!==null&&children.has(n.parent))children.get(n.parent).push(n);
+  const maxIdx=new Map();
+  function computeMax(id){
+    if(maxIdx.has(id))return maxIdx.get(id);
+    let m=indexMap.get(id)??-1;
+    for(const c of (children.get(id)||[]))m=Math.max(m,computeMax(c.id));
+    maxIdx.set(id,m);
+    return m;
+  }
+  let curr=map.get(nodeId);
+  const seen=new Set();
+  while(curr&&!seen.has(curr.id)){
+    seen.add(curr.id);
+    const cs=children.get(curr.id)||[];
+    if(!cs.length)break;
+    curr=cs.reduce((best,c)=>computeMax(c.id)>=computeMax(best.id)?c:best,cs[0]);
+  }
+  return curr.id;
+}
+
+export function resolveBranchLeaf(doc,nodeId,preferredLeafId=doc?.branch_leaf) {
+  const leaves=new Set(branchLeaves(doc).map(n=>n.id));
+  if(preferredLeafId&&leaves.has(preferredLeafId)&&isAncestor(doc,nodeId,preferredLeafId))return preferredLeafId;
+  return latestLeafUnder(doc,nodeId);
+}
+
+export function lineThrough(doc,id,leafId=null) {
   const map=new Map(doc.nodes.map(n=>[n.id,n])),ancestors=[];
   let node=map.get(id);
   if(!node)throw Error('선택한 국면이 없습니다.');
   while(node){ancestors.push(node);node=map.get(node.parent);}
   const line=ancestors.reverse();node=line.at(-1);
+  if(leafId&&map.has(leafId)&&isAncestor(doc,node.id,leafId)&&leafId!==node.id){
+    const down=[];
+    let cur=map.get(leafId);
+    while(cur&&cur.id!==node.id){down.push(cur);cur=map.get(cur.parent);}
+    return [...line,...down.reverse()];
+  }
   for(let i=0;i<doc.nodes.length;i++){
     node=doc.nodes.find(n=>n.parent===node.id);if(!node)break;line.push(node);
   }
   return line;
+}
+
+export function nextInBranch(doc,nodeId,leafId=doc?.branch_leaf) {
+  const line=lineThrough(doc,nodeId,resolveBranchLeaf(doc,nodeId,leafId));
+  const idx=line.findIndex(n=>n.id===nodeId);
+  return idx>=0&&idx+1<line.length?line[idx+1]:null;
 }
 
 export function addNode(doc,parent,action,position) {

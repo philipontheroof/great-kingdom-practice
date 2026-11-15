@@ -19,8 +19,11 @@ export function boardSvg(position,{actions=[],lastAction=null,analysis=null,show
     else nums.set(a,i+1);
   });
   const lastCell=(lastAction===null||lastAction===81)?null:(lastAction>=400?null:(lastAction>=100?(lastAction%100):lastAction));
-  const candidates=(analysis?.mcts?.candidates||[]).filter(c=>c.action!==81&&c.visits>0).slice(0,8);
-  const ranks=new Map(candidates.map((c,i)=>[c.action,{...c,rank:i+1}]));
+  const allVisited=(analysis?.mcts?.candidates||[]).filter(c=>c.visits>0);
+  const candidates=allVisited.filter(c=>c.action!==81).slice(0,8);
+  const passCandidate=showCandidates?allVisited.find(c=>c.action===81):null;
+  const passIsBest=Boolean(passCandidate&&allVisited[0]?.action===81);
+  const ranks=new Map(candidates.map((c,i)=>[c.action,{...c,rank:i+1,isBest:allVisited[0]?.action===c.action}]));
   const pvMap=new Map();
   if(showPV&&analysis?.mcts?.principal_variation?.length){
     analysis.mcts.principal_variation.forEach((action,i)=>{
@@ -60,7 +63,7 @@ export function boardSvg(position,{actions=[],lastAction=null,analysis=null,show
       if(showNumbers&&nums.has(i))svg+=`<text class="move-number" x="${x}" y="${y}" fill="${tile.castle===3?'#233042':'white'}">${nums.get(i)}</text>`;
       if(lastCell===i)svg+=`<rect data-last="${i}" x="${x-27}" y="${y-27}" width="54" height="54" rx="6" fill="none" stroke="#172f48" stroke-width="2.5"/>`;
     } else if(showCandidates&&rank) {
-      svg+=`<circle cx="${x}" cy="${y-(tile.predictedOwner?5:0)}" r="20" class="candidate-dot ${rank.rank===1?'best':''}"/><text class="candidate-number" x="${x}" y="${y-(tile.predictedOwner?5:0)}">${(rank.visit_share*100).toFixed(1)}%</text>`;
+      svg+=`<circle cx="${x}" cy="${y-(tile.predictedOwner?5:0)}" r="20" class="candidate-dot ${rank.isBest?'best':''}"/><text class="candidate-number" x="${x}" y="${y-(tile.predictedOwner?5:0)}">${(rank.visit_share*100).toFixed(1)}%</text>`;
     }
     if(pvMap.has(i)) {
       const pv=pvMap.get(i);
@@ -73,6 +76,10 @@ export function boardSvg(position,{actions=[],lastAction=null,analysis=null,show
   }else if(position.previous_move_was_pass){
     const passedBlue=position.side_to_move==='second';
     svg+=`<g class="pass-badge" pointer-events="none" aria-label="${passedBlue?'파란':'빨간'} 성 패스"><rect x="233" y="575" width="136" height="24" rx="12" fill="${passedBlue?'#4173e6':'#ee6338'}" filter="url(#castleShadow)"/><text x="301" y="587" text-anchor="middle" dominant-baseline="central" fill="#ffffff" font-size="11.5" font-weight="750">${passedBlue?'파란':'빨간'} 성 패스</text></g>`;
+  }
+  if(passCandidate){
+    const label=`패스 ${(passCandidate.visit_share*100).toFixed(1)}%`;
+    svg+=`<g class="pass-candidate-badge" pointer-events="none" aria-label="패스 착수 비중 ${(passCandidate.visit_share*100).toFixed(1)}%"><rect x="452" y="575" width="128" height="24" rx="12" fill="${passIsBest?'#327967':'#e0ece8'}" stroke="${passIsBest?'#327967':'#b5cec4'}" stroke-width="1.5" filter="url(#castleShadow)"/><text x="516" y="587" text-anchor="middle" dominant-baseline="central" fill="${passIsBest?'#ffffff':'#2c5646'}" font-size="11" font-weight="750">${label}</text></g>`;
   }
   return svg+'</svg>';
 }

@@ -1,6 +1,6 @@
 <!doctype html>
 <html data-execution="local" lang="ko">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#172e45"><title>Great Kingdom · 연습실</title><link rel="icon" href="data:,"><link rel="stylesheet" href="./style.css?v=15"><script type="module" src="./app.mjs?v=15"></script></head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#172e45"><title>Great Kingdom · 연습실</title><link rel="icon" href="data:,"><link rel="stylesheet" href="./style.css?v=16"><script type="module" src="./app.mjs?v=16"></script></head>
 <body>
   <main>
     <header class="study-toolbar">
@@ -177,6 +177,7 @@
             </div>
           </div>
           <p class="graph-note">위는 선택 가지 평가(빨강 유리 위 / 파랑 유리 아래), 아래는 모든 분기 · 노드를 눌러 그 국면으로 이동 · <span class="memo-dot-inline"></span> 메모 있음</p>
+          <div id="branch-bar" class="branch-bar" aria-label="현재 선택된 가지" hidden></div>
           <div id="timeline" class="timeline-scroll" aria-label="평가 그래프와 수순 분기"></div>
           <div class="tree-tools">
             <section class="tree-tool">
@@ -243,9 +244,10 @@
             <label class="switch-row nested" id="once-auto-show-wrap"><input id="once-auto-show" type="checkbox" role="switch"><span>누르면 현재 국면 시각화도 켜기</span></label>
             <div class="field-label">이번 턴부터 계속 분석</div>
             <div class="pair">
-              <label class="switch-row side-blue"><input id="continuous-first" type="checkbox" role="switch"><span>파랑 턴</span></label>
-              <label class="switch-row side-red"><input id="continuous-second" type="checkbox" role="switch"><span>빨강 턴</span></label>
+              <label class="switch-row side-blue"><input id="continuous-first" type="checkbox" role="switch"><span>파랑 턴<small id="continuous-first-tag" class="inline-tag" hidden>AI 연동</small></span></label>
+              <label class="switch-row side-red"><input id="continuous-second" type="checkbox" role="switch"><span>빨강 턴<small id="continuous-second-tag" class="inline-tag" hidden>AI 연동</small></span></label>
             </div>
+            <small id="continuous-ai-hint" class="hint">AI 착수를 켜면 해당 색깔의 계속 분석이 자동으로 켜집니다.</small>
             <div class="field-label">최대 시간 or visit</div>
             <div class="segmented-small" id="analysis-limit-tabs">
               <button type="button" data-unit="seconds" class="active">⏱ 시간(초)</button>
@@ -378,7 +380,7 @@
         <details class="settings-group" open>
           <summary><span class="group-no">4</span>착수 (AI 대국)</summary>
           <section class="settings-sub">
-            <div class="play-help">AI 착수는 국면 트리의 <b>마지막 수(leaf)</b>에서만 발동됩니다. 과거 수를 볼 때는 두지 않아요.</div>
+            <div class="play-help">AI 착수는 국면 트리의 <b>마지막 수(leaf)</b>에서만 발동됩니다. 과거 수를 볼 때는 두지 않아요. AI 착수를 켜면 해당 색깔의 <b>자동 분석</b>도 함께 켜집니다.</div>
             <div class="play-row side-blue">
               <label class="switch-row"><input id="play-first" type="checkbox" role="switch"><span>AI가 파랑 착수</span></label>
               <div class="play-budget-control">
@@ -413,6 +415,7 @@
               <button id="ai-resume" class="text-button" hidden>AI 착수 재개</button>
             </div>
             <label class="switch-row" style="margin-top:8px"><input id="play-ponder" type="checkbox" role="switch" checked><span>내 차례에도 AI 미리 탐색 (Pondering)</span></label>
+            <small id="ponder-hint" class="hint">켜면 분석 제한이 무제한(♾️)으로 설정되어 내 차례에도 계속 자동 분석합니다.</small>
             <select id="ai-seconds" hidden><option value="1">1초</option><option value="2">2초</option><option value="5">5초</option><option value="10">10초</option></select>
             <select id="ai-color" hidden><option value="none">none</option></select>
           </section>

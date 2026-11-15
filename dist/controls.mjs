@@ -79,7 +79,7 @@ export function budgetReached(budget,analysis){
 export const budgetLabel=b=>b.unit==='none'?'무제한':b.unit==='visits'?`${b.value.toLocaleString()} visits`:`${b.value}초`;
 
 export function missingNodes(doc,scope='branch',backend=null,target='missing'){
- const nodes=scope==='all'?doc.nodes:lineThrough(doc,doc.selected);
+ const nodes=scope==='all'?doc.nodes:lineThrough(doc,doc.selected,doc.branch_leaf);
  if(target==='all')return nodes;
  return nodes.filter(n=>!n.analysis||(n.analysis.model&&n.analysis.model.id!==doc.model_id)||(backend&&n.analysis.backend!==backend));
 }

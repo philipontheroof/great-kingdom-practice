@@ -1,4 +1,4 @@
-import {newStudy,addNode,pathTo,lineThrough,importDocument,blueEvaluation,studyForSave} from './study.mjs';
+import {newStudy,addNode,pathTo,lineThrough,importDocument,blueEvaluation,studyForSave,resolveBranchLeaf,nextInBranch,branchLeaves} from './study.mjs';
 import {facts,stateGroups,territory,canonicalState,positionPayload} from './engine.mjs';
 import {boardSvg} from './board.mjs';
 import {STORE,persistStudy,retryAnalysis} from './client.mjs';
@@ -223,7 +223,7 @@ async function setTurnSide(side){
 async function startAnalysis({ai=false,kind=ai?'ai':'once'}={}){
  if(!active()||moving||batching||!modelAvailable()||(ai&&!canAiPlay()))return;
  cancel();const node=active(),study=doc,model=doc.model_id,execution=backend(),token=controls.begin(node.id,model,execution),controller=new AbortController();analysisController=controller;analyzing=true;analysisKind=kind;
- const ponder=kind==='ponder',budget=ai?settings.play[node.position.side_to_move]:ponder?{unit:'seconds',value:120}:settings.analysisLimit;if(!ponder)render();else renderSettings();
+ const ponder=kind==='ponder',budget=ai?settings.play[node.position.side_to_move]:ponder?{unit:'none',value:null}:settings.analysisLimit;if(!ponder)render();else renderSettings();
  const valid=()=>study===doc&&controls.accepts(token,doc.selected,doc.model_id,backend());let result;
  try{result=await search(node,budget,{signal:controller.signal,onUpdate:r=>{if(valid()&&!ponder){acceptResult(r,node,model,execution);if(r.done||Date.now()-lastPaint>=180){lastPaint=Date.now();render();}}}});
  if(!valid())return;if(!ponder){acceptResult(result,node,model,execution);notice('');}
@@ -252,6 +252,7 @@ async function selectNode(id){
  applyPinsOnNavigation();
  if(onceNode!==id)onceNode=null;
  doc.selected=id;
+ doc.branch_leaf=resolveBranchLeaf(doc,id,doc.branch_leaf);
  save();
  render();
  schedule();
@@ -271,7 +272,7 @@ async function place(action,fromAI=false){
   }
   if(study!==doc||token!==controls.epoch)return;
   applyPinsOnNavigation();
-  addNode(doc,node.id,action,next);onceNode=null;save();notice('');
+  addNode(doc,node.id,action,next);doc.branch_leaf=resolveBranchLeaf(doc,doc.selected,doc.branch_leaf);onceNode=null;save();notice('');
  }finally{moving=false;if(token===controls.epoch)render();}
  if(token===controls.epoch&&placeMode==='alternate')schedule();
 }
@@ -329,8 +330,9 @@ function renderBoard(){
  if($('ply-label'))$('ply-label').textContent=`${node.ply}수째`;
  if($('nav-label'))$('nav-label').textContent=`${node.ply}수`;
  if($('first'))$('first').disabled=$('previous').disabled=node.parent===null;
- if($('next'))$('next').disabled=$('last').disabled=!doc.nodes.some(n=>n.parent===node.id);
- if($('pass'))$('pass').disabled=Boolean(p.result||preview||moving||controls.aiTurn(p)||(backend()==='local'&&!local)||placeMode!=='alternate');
+ if($('next'))$('next').disabled=$('last').disabled=!nextInBranch(doc,node.id,doc.branch_leaf);
+ const passCand=(L.policy&&visible&&!preview)?(visible.mcts?.candidates||[]).find(c=>c.action===81&&c.visits>0):null;
+ if($('pass')){$('pass').disabled=Boolean(p.result||preview||moving||controls.aiTurn(p)||(backend()==='local'&&!local)||placeMode!=='alternate');$('pass').textContent=passCand?`패스 (${(passCand.visit_share*100).toFixed(1)}%)`:'패스';}
  if($('preview-exit'))$('preview-exit').hidden=!preview;
  if($('preview-label'))$('preview-label').hidden=!(settings.layers.ownership&&visible);
 
@@ -438,7 +440,10 @@ function renderSettings(){
  setSwitch('once-auto-show',settings.onceAutoShow);
  
  // 2.3 이번 턴부터 계속 분석 토글 (빨강 / 파랑)
- for(const s of SIDES)setSwitch(`continuous-${s}`,controls.continuous[s]);
+ for(const s of SIDES){
+  setSwitch(`continuous-${s}`,controls.continuous[s]);
+  if($(`continuous-${s}-tag`))$(`continuous-${s}-tag`).hidden=!controls.aiSide[s];
+ }
  
  // 2.4 최대 시간 or visit
  const l=settings.analysisLimit;
@@ -516,6 +521,7 @@ function renderSettings(){
  const tVal=$('play-temperature');
  if(tVal&&document.activeElement!==tVal)tVal.value=String(settings.playTemperature);
  setSwitch('play-ponder',settings.ponder);
+ if($('ponder-hint'))$('ponder-hint').textContent=settings.ponder?'무제한(♾️) 자동 분석 연동 중 · 내 차례에도 계속 탐색합니다.':'켜면 분석 제한이 무제한(♾️)으로 설정되어 내 차례에도 계속 자동 분석합니다.';
  const isLeaf=isLeafNode(doc,node?.id);
  const who=SIDES.filter(s=>controls.aiSide[s]).map(sideName).join('·');
  const pondering=analyzing&&analysisKind==='ponder';
@@ -538,7 +544,24 @@ function renderMemos(){
  if(!memos.length){const span=document.createElement('span');span.className='muted';span.textContent='메모가 있는 국면이 여기에 모여요.';list.append(span);return;}
  for(const n of memos){const b=document.createElement('button');b.type='button';b.className=n.id===doc.selected?'active':'';b.textContent=`${n.ply}수 ${n.action===null?'시작':coord(n.action)} · ${n.notes.trim().slice(0,24)}`;b.addEventListener('click',()=>run(()=>selectNode(n.id)));list.append(b);}
 }
-function renderTimeline(){const viewport=$('timeline');if(!viewport)return;const left=viewport.scrollLeft;viewport.innerHTML=timelineSvg(doc,graphAnalysis,graphMode);viewport.scrollLeft=left;renderMemos();}
+function renderBranchBar(){
+ const bar=$('branch-bar');if(!bar||!doc)return;
+ const leaves=branchLeaves(doc);
+ if(leaves.length<=1){bar.hidden=true;bar.replaceChildren();return;}
+ bar.hidden=false;bar.replaceChildren();
+ const activeLeaf=resolveBranchLeaf(doc,doc.selected,doc.branch_leaf);
+ doc.branch_leaf=activeLeaf;
+ const label=document.createElement('span');label.className='branch-bar-label';label.textContent='현재 가지';bar.append(label);
+ leaves.forEach((leaf,i)=>{
+  const b=document.createElement('button');b.type='button';
+  b.className=`branch-pill${leaf.id===activeLeaf?' active':''}`;
+  b.setAttribute('aria-pressed',String(leaf.id===activeLeaf));
+  b.textContent=`가지 ${i+1} · ${leaf.ply}수(${leaf.action===null?'시작':coord(leaf.action)})`;
+  b.addEventListener('click',()=>run(async()=>{doc.branch_leaf=leaf.id;await selectNode(leaf.id);}));
+  bar.append(b);
+ });
+}
+function renderTimeline(){const viewport=$('timeline');if(!viewport)return;const left=viewport.scrollLeft;doc.branch_leaf=resolveBranchLeaf(doc,doc.selected,doc.branch_leaf);viewport.innerHTML=timelineSvg(doc,graphAnalysis,graphMode,doc.branch_leaf);viewport.scrollLeft=left;renderBranchBar();renderMemos();}
 function render(){if(!active()?.position)return;
  if($('title')&&document.activeElement!==$('title'))$('title').value=doc.title;
  if($('notes')&&document.activeElement!==$('notes'))$('notes').value=active().notes||'';
@@ -562,6 +585,7 @@ async function importPV(){
    const child=addNode(doc,parentId,a,next);
    parentId=child.id;
   }
+  doc.branch_leaf=resolveBranchLeaf(doc,doc.selected,doc.branch_leaf);
   onceNode=null;
   save();
   notice(`${actions.length}수의 예상 수순을 분기로 가져왔습니다.`);
@@ -618,8 +642,8 @@ async function rebuildStudy(imported){
  }
  return {...imported,nodes};
 }
-async function loadStudy(value,{initializeModel=true,preserveCurrent=true}={}){const imported=importDocument(value);clearTimeout(saveTimer);if(preserveCurrent&&!saveNow())throw Error('현재 기보를 내보내기로 보관해 주세요.');cancel();controls.playing=false;const epoch=controls.epoch,rebuilt=await rebuildStudy(imported);if(epoch!==controls.epoch)return;doc={...rebuilt,storage_id:value.storage_id||crypto.randomUUID()};placeMode='alternate';onceNode=null;shown.clear();populateModels();render();save();if(initializeModel&&backend()==='local'&&localModel!==doc.model_id)await setupBackend();else if(initializeModel)schedule();}
-async function createGame(setup,{keepPlaceMode=false}={}){cancel();controls.playing=false;const epoch=controls.epoch,p=await position({ruleset_version:doc?.ruleset_version||'gk-v2.2',setup,actions:[]});if(epoch!==controls.epoch)return;clearTimeout(saveTimer);if(!saveNow())throw Error('현재 기보를 먼저 보관해 주세요.');const model=doc?.model_id||config?.models?.[0]?.id||null;doc={...newStudy(setup,p),storage_id:crypto.randomUUID(),model_id:model};doc.title=`${new Date().toLocaleDateString('ko-KR',{month:'long',day:'numeric'})}의 연습`;if(!keepPlaceMode)placeMode='alternate';onceNode=null;shown.clear();if(placeMode==='alternate'&&controls.anyAI())controls.playing=true;populateModels();save();render();if($('new-dialog'))$('new-dialog').close();if(placeMode==='alternate')schedule();}
+async function loadStudy(value,{initializeModel=true,preserveCurrent=true}={}){const imported=importDocument(value);clearTimeout(saveTimer);if(preserveCurrent&&!saveNow())throw Error('현재 기보를 내보내기로 보관해 주세요.');cancel();controls.playing=false;const epoch=controls.epoch,rebuilt=await rebuildStudy(imported);if(epoch!==controls.epoch)return;doc={...rebuilt,storage_id:value.storage_id||crypto.randomUUID()};doc.branch_leaf=resolveBranchLeaf(doc,doc.selected,doc.branch_leaf);placeMode='alternate';onceNode=null;shown.clear();populateModels();render();save();if(initializeModel&&backend()==='local'&&localModel!==doc.model_id)await setupBackend();else if(initializeModel)schedule();}
+async function createGame(setup,{keepPlaceMode=false}={}){cancel();controls.playing=false;const epoch=controls.epoch,p=await position({ruleset_version:doc?.ruleset_version||'gk-v2.2',setup,actions:[]});if(epoch!==controls.epoch)return;clearTimeout(saveTimer);if(!saveNow())throw Error('현재 기보를 먼저 보관해 주세요.');const model=doc?.model_id||config?.models?.[0]?.id||null;doc={...newStudy(setup,p),storage_id:crypto.randomUUID(),model_id:model};doc.branch_leaf=resolveBranchLeaf(doc,doc.selected,doc.branch_leaf);doc.title=`${new Date().toLocaleDateString('ko-KR',{month:'long',day:'numeric'})}의 연습`;if(!keepPlaceMode)placeMode='alternate';onceNode=null;shown.clear();if(placeMode==='alternate'&&controls.anyAI())controls.playing=true;populateModels();save();render();if($('new-dialog'))$('new-dialog').close();if(placeMode==='alternate')schedule();}
 function showNew(){if(!$('recent-studies'))return;$('recent-studies').replaceChildren();for(const entry of library()){const b=document.createElement('button');b.type='button';b.textContent=`${entry.title||'이름 없는 연습'} · ${entry.nodes.length}개 국면`;b.addEventListener('click',()=>run(async()=>{await loadStudy(entry);$('new-dialog').close();}));$('recent-studies').append(b);}$('new-dialog').showModal();}
 async function batch(){if(batching){cancel();render();return;}if(!modelAvailable())return;
  cancel();controls.playing=false;
@@ -767,7 +791,14 @@ for(const [id,key] of [['ownership-toggle','ownership'],['layer-policy','policy'
 for(const s of SIDES){
  $(`play-${s}`)?.addEventListener('change',e=>{
    cancel();controls.aiSide[s]=e.target.checked;
-   if(e.target.checked&&enforceFloor())notice(`분석 제한을 ${sideName(s)} 착수 탐색량(${budgetLabel(settings.analysisLimit)}) 이상으로 올렸어요.`);
+   if(e.target.checked){
+    controls.continuous[s]=true;
+    if(settings.ponder){
+     settings.analysisLimit={unit:'none',value:null};
+     for(const side of SIDES)controls.continuous[side]=true;
+    }
+    if(enforceFloor())notice(`분석 제한을 ${sideName(s)} 착수 탐색량(${budgetLabel(settings.analysisLimit)}) 이상으로 올렸어요.`);
+   }
    saveSettings();render();schedule();
  });
  const budgetChanged=()=>{
@@ -779,7 +810,14 @@ for(const s of SIDES){
 }
 $('ai-resume')?.addEventListener('click',()=>{cancel();render();schedule();});
 $('play-temperature')?.addEventListener('change',()=>{settings.playTemperature=normalizeTemperature($('play-temperature').value,{fallback:TEMPERATURE_DEFAULT});saveSettings();render();});
-$('play-ponder')?.addEventListener('change',e=>{settings.ponder=e.target.checked;saveSettings();if(!settings.ponder&&analysisKind==='ponder')cancel();render();if(settings.ponder)schedule();});
+$('play-ponder')?.addEventListener('change',e=>{
+ settings.ponder=e.target.checked;
+ if(settings.ponder){
+  settings.analysisLimit={unit:'none',value:null};
+  if(controls.anyAI()){for(const side of SIDES)controls.continuous[side]=true;}
+ }
+ saveSettings();if(!settings.ponder&&analysisKind==='ponder')cancel();render();if(settings.ponder)schedule();
+});
 $('ai-seconds')?.addEventListener('change',()=>{
  const val=Number($('ai-seconds').value);
  for(const s of SIDES)settings.play[s]={unit:'seconds',value:val};
@@ -800,7 +838,7 @@ $('batch-start')?.addEventListener('click',()=>run(batch));
 // 기타
 $('backend')?.addEventListener('change',()=>run(setupBackend));
 $('model-select')?.addEventListener('change',()=>{cancel();controls.playing=false;doc.model_id=$('model-select').value||null;populateModels();save();render();run(setupBackend);});
-$('first')?.addEventListener('click',()=>run(()=>selectNode(doc.nodes[0].id)));$('previous')?.addEventListener('click',()=>{if(active().parent)run(()=>selectNode(active().parent));});$('next')?.addEventListener('click',()=>{const n=doc.nodes.find(n=>n.parent===doc.selected);if(n)run(()=>selectNode(n.id));});$('last')?.addEventListener('click',()=>{const n=lineThrough(doc,doc.selected).at(-1);run(()=>selectNode(n.id));});$('pass')?.addEventListener('click',()=>run(()=>place(81)));
+$('first')?.addEventListener('click',()=>run(()=>selectNode(doc.nodes[0].id)));$('previous')?.addEventListener('click',()=>{if(active().parent)run(()=>selectNode(active().parent));});$('next')?.addEventListener('click',()=>{const n=nextInBranch(doc,doc.selected,doc.branch_leaf);if(n)run(()=>selectNode(n.id));});$('last')?.addEventListener('click',()=>{const n=lineThrough(doc,doc.selected,doc.branch_leaf).at(-1);if(n)run(()=>selectNode(n.id));});$('pass')?.addEventListener('click',()=>run(()=>place(81)));
 $('timeline')?.addEventListener('click',e=>{const t=e.target?.closest?.('[data-node]');if(t)run(()=>selectNode(t.dataset.node));});$('timeline')?.addEventListener('keydown',e=>{if(['Enter',' '].includes(e.key)){const t=e.target?.closest?.('[data-node]');if(t){e.preventDefault();run(()=>selectNode(t.dataset.node));}}});
 for(const [id,value]of [['graph-win','win'],['graph-score','score']])$(id)?.addEventListener('click',()=>{graphMode=value;$('graph-win')?.classList.toggle('active',value==='win');$('graph-score')?.classList.toggle('active',value==='score');renderTimeline();});
 $('pv-import')?.addEventListener('click',()=>run(importPV));$('preview-exit')?.addEventListener('click',()=>{preview=null;renderBoard();});
