@@ -2,17 +2,41 @@ import {RULESET,features,positionPayload,replayPosition,canonicalState} from './
 import {BrowserSearch} from './browser-search.mjs';
 import {decodeNetworkHeads} from './local-client.mjs';
 
-let ort=null,session=null,manifest=null,backend=null,generation=0;
-const rawCache=new Map(),treeCache=new Map(),MAX_RAW_CACHE=64,MAX_TREE_CACHE=24;
+let ort=null,session=null,manifest=null,backend=null,generation=0,modelCacheSource='network',rawCacheHits=0,rawCacheMisses=0;
+const rawCache=new Map(),treeCache=new Map(),MAX_RAW_CACHE=1024,MAX_TREE_CACHE=24;
 function lruGet(map,key){if(!map.has(key))return undefined;const val=map.get(key);map.delete(key);map.set(key,val);return val;}
 function lruSet(map,key,val,max){if(map.has(key))map.delete(key);map.set(key,val);while(map.size>max)map.delete(map.keys().next().value);}
 async function cachedInfer(state){
   const key=`${manifest.model_id}:${canonicalState(state)}`;
   const hit=lruGet(rawCache,key);
-  if(hit)return hit;
+  if(hit){rawCacheHits++;return hit;}
+  rawCacheMisses++;
   const res=await infer(state);
   lruSet(rawCache,key,res,MAX_RAW_CACHE);
   return res;
+}
+function isAllFinite(values){
+  for(let i=0;i<values.length;i++)if(!Number.isFinite(values[i]))return false;
+  return true;
+}
+function runtimeStats(visitsPerSecond=null){
+  const precision=manifest?.precision||manifest?.quantization||'FP32 (비양자화)';
+  const quantized=Boolean(manifest?.quantization&&!/^fp32$/i.test(String(manifest.quantization)));
+  return {
+    backend,
+    precision,
+    quantized,
+    wasm_threads:backend==='wasm'?(ort?.env?.wasm?.numThreads??1):null,
+    model_cache:modelCacheSource,
+    raw_cache_size:rawCache.size,
+    raw_cache_max:MAX_RAW_CACHE,
+    raw_cache_hits:rawCacheHits,
+    raw_cache_misses:rawCacheMisses,
+    tree_cache_size:treeCache.size,
+    tree_cache_max:MAX_TREE_CACHE,
+    visits_per_second:visitsPerSecond,
+    server_inference:false,
+  };
 }
 let inferenceLock=Promise.resolve();
 function acquireInferenceLock(){
@@ -29,8 +53,8 @@ const sha256=async bytes=>[...new Uint8Array(await crypto.subtle.digest('SHA-256
 async function cachedModel(url,expectedHash){
   const request=new Request(`${url}?sha256=${expectedHash}`),cache=globalThis.caches?await caches.open('gk-practice-onnx-v1'):null;
   let response=cache?await cache.match(request):null;
-  if(response){const bytes=await response.clone().arrayBuffer();if(await sha256(bytes)!==expectedHash){await cache.delete(request);response=null;}}
-  if(!response){response=await fetch(url,{cache:'no-cache',credentials:'same-origin'});if(!response.ok)throw Error(`ONNX model download failed (${response.status})`);const bytes=await response.clone().arrayBuffer();if(await sha256(bytes)!==expectedHash)throw Error('ONNX export SHA-256 does not match its manifest');if(cache)await cache.put(request,response.clone());}
+  if(response){const bytes=await response.clone().arrayBuffer();if(await sha256(bytes)!==expectedHash){await cache.delete(request);response=null;}else{modelCacheSource='cache';}}
+  if(!response){modelCacheSource='network';response=await fetch(url,{cache:'no-cache',credentials:'same-origin'});if(!response.ok)throw Error(`ONNX model download failed (${response.status})`);const bytes=await response.clone().arrayBuffer();if(await sha256(bytes)!==expectedHash)throw Error('ONNX export SHA-256 does not match its manifest');if(cache)await cache.put(request,response.clone());}
   return response.arrayBuffer();
 }
 
@@ -61,7 +85,7 @@ async function initialize(value,id){
     catch (wasmError) { throw Error(`WebGPU initialization failed: ${errorText(webgpuError)}; WASM initialization failed: ${errorText(wasmError)}`); }
   }
   if(session.inputNames.join(',')!==value.input_names.join(',')||session.outputNames.join(',')!==value.output_names.join(','))throw Error('ONNX session names do not match the verified manifest');
-  return {model_id:value.model_id,sha256:value.sha256,onnx_sha256:value.onnx_sha256,backend,
+  return {model_id:value.model_id,sha256:value.sha256,onnx_sha256:value.onnx_sha256,backend,stats:runtimeStats(null),
     message:backend==='webgpu'?'Browser local model ready · WebGPU':'Browser local model ready · WASM fallback'};
 }
 
@@ -72,7 +96,7 @@ async function infer(state){
     const f=features(state),feeds={spatial:tensor(f.spatial,[1,12,9,9]),global_features:tensor(f.global_features,[1,3])};let out;
     try{out=await session.run(feeds);}catch(error){if(backend!=='webgpu')throw error;console.warn('WebGPU inference failed, attempting WASM fallback:',error);await fallbackToWasm();out=await session.run(feeds);}
     if(out.policy_logits.data.length!==82||out.value_logit.data.length!==1||out.score_logits.data.length!==manifest.shapes.score_logits[0]||out.ownership_logits.data.length!==243)throw Error('ONNX session returned unexpected output dimensions');
-    if(![out.policy_logits.data,out.value_logit.data,out.score_logits.data,out.ownership_logits.data].every(values=>Array.from(values).every(Number.isFinite)))throw Error('ONNX session returned a non-finite model output');
+    if(!isAllFinite(out.policy_logits.data)||!isAllFinite(out.value_logit.data)||!isAllFinite(out.score_logits.data)||!isAllFinite(out.ownership_logits.data))throw Error('ONNX session returned a non-finite model output');
     return decodeNetworkHeads({policy_logits:out.policy_logits.data,value_logit:out.value_logit.data,
       score_logits:out.score_logits.data,ownership_logits:out.ownership_logits.data},
       {legalActions:positionPayload(state).legal_actions,scoreMin:manifest.score_min});
@@ -113,25 +137,32 @@ async function analyze(id,payload,options,runGeneration){
     search=promoted?BrowserSearch.fromNode(promoted,s=>cachedInfer(s)):new BrowserSearch(state,s=>s===state?raw:cachedInfer(s));
     lruSet(treeCache,treeKey,{search,raw},MAX_TREE_CACHE);
   }
+  const initialVisits=search.rootVisits;
   const searchStartedAt=performance.now();
   const deadline=searchStartedAt+seconds*1000,continuousDeadline=maxSeconds===null?Infinity:streamStartedAt+maxSeconds*1000;let snapshot,lastUpdateAt=null;
+  const currentVps=()=>{
+    const elapsedSec=(performance.now()-searchStartedAt)/1000;
+    const newVisits=search.rootVisits-initialVisits;
+    return elapsedSec>0&&newVisits>0?newVisits/elapsedSec:0;
+  };
   do{
     if(runGeneration!==generation)throw new DOMException('Analysis cancelled','AbortError');
     const remaining=maxVisits-search.rootVisits;
     const stepVisits=continuous?Math.max(0,Math.min(8,remaining)):Math.max(0,Math.min(8,visits-search.rootVisits));
     snapshot=await search.advance(stepVisits,{deadline:continuous?continuousDeadline:deadline,stopped:()=>runGeneration!==generation});
     const done=!continuous?(snapshot.mcts.root_visits>=visits||performance.now()>=deadline):(snapshot.mcts.root_visits>=maxVisits||performance.now()>=continuousDeadline);
-    const result={...snapshot,...base(),raw_network:{policy:raw.policy82,win_probability:raw.win_probability,expected_score:raw.expected_score,score_min:raw.score_min,score_distribution:raw.score_distribution,territory_probabilities:raw.territory_probabilities},done,cumulative_elapsed_seconds:(performance.now()-streamStartedAt)/1000};
+    const vps=currentVps();
+    const result={...snapshot,...base(),stats:runtimeStats(vps),raw_network:{policy:raw.policy82,win_probability:raw.win_probability,expected_score:raw.expected_score,score_min:raw.score_min,score_distribution:raw.score_distribution,territory_probabilities:raw.territory_probabilities},done,cumulative_elapsed_seconds:(performance.now()-streamStartedAt)/1000};
     const now=performance.now();
     // Coalesce very fast tactical batches so a continuous search does not
     // flood the UI with hundreds of renders per second. Always send the first
     // available snapshot and the final one.
     if(lastUpdateAt===null||done||now-lastUpdateAt>=200){reply(id,'update',result);lastUpdateAt=now;}
     if(done)break;
-    if(continuous)await new Promise(resolve=>setTimeout(resolve,8));
+    if(continuous)await new Promise(resolve=>setTimeout(resolve,0));
   }while(runGeneration===generation);
   if(runGeneration!==generation)throw new DOMException('Analysis cancelled','AbortError');
-  return {...snapshot,...base(),raw_network:{policy:raw.policy82,win_probability:raw.win_probability,expected_score:raw.expected_score,score_min:raw.score_min,score_distribution:raw.score_distribution,territory_probabilities:raw.territory_probabilities},done:true,cumulative_elapsed_seconds:(performance.now()-streamStartedAt)/1000};
+  return {...snapshot,...base(),stats:runtimeStats(currentVps()),raw_network:{policy:raw.policy82,win_probability:raw.win_probability,expected_score:raw.expected_score,score_min:raw.score_min,score_distribution:raw.score_distribution,territory_probabilities:raw.territory_probabilities},done:true,cumulative_elapsed_seconds:(performance.now()-streamStartedAt)/1000};
 }
 
 onmessage=async event=>{
@@ -140,7 +171,7 @@ onmessage=async event=>{
     if(type==='cancel'){generation++;return;}
     if(type==='initialize'){
       generation++;
-      rawCache.clear();treeCache.clear();
+      rawCache.clear();treeCache.clear();rawCacheHits=0;rawCacheMisses=0;modelCacheSource='network';rawCacheHits=0;rawCacheMisses=0;modelCacheSource='network';
       const release=await acquireInferenceLock();
       try{
         reply(id,'update',{stage:'runtime',status:'loading'});
@@ -153,7 +184,7 @@ onmessage=async event=>{
     if(type==='analyze'){const thisGeneration=++generation;reply(id,'result',await analyze(id,value,options,thisGeneration));return;}
     if(type==='close'){
       generation++;
-      rawCache.clear();treeCache.clear();
+      rawCache.clear();treeCache.clear();rawCacheHits=0;rawCacheMisses=0;modelCacheSource='network';
       const release=await acquireInferenceLock();
       try{
         await session?.release?.();

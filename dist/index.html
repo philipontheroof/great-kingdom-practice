@@ -216,7 +216,14 @@
             <select id="model-select" aria-label="사용 모델"><option>모델 목록 불러오는 중…</option></select>
             <select id="backend" hidden aria-hidden="true"><option value="local">이 기기 · WebGPU / WASM</option><option value="host">Mac</option></select>
             <small id="model-detail" class="hint">모델을 불러오고 있어요</small>
-            <small id="runtime-note" class="hint">이 기기에서 계산 준비 중</small>
+            <small id="runtime-note" class="hint">서버 추론 미사용 · 브라우저 로컬 전용 · 준비 중</small>
+            <div id="model-stats" class="model-stats" aria-label="브라우저 모델 실행 상태">
+              <div><span>서버 추론</span><strong>안 씀 (브라우저 로컬 전용)</strong></div>
+              <div><span>실행 백엔드</span><strong id="stat-backend">—</strong></div>
+              <div><span>정밀도 / 양자화</span><strong id="stat-precision">—</strong></div>
+              <div><span>캐시</span><strong id="stat-cache">—</strong></div>
+              <div><span>탐색 속도</span><strong id="stat-speed">— visits/s</strong></div>
+            </div>
           </section>
         </details>
 
@@ -227,7 +234,10 @@
             <div class="search-status-box">
               <div class="search-visits-line">
                 <span class="label">현재 분석 visit 수</span>
-                <strong id="search-visits-num">0 visits</strong>
+                <span class="search-visits-right">
+                  <strong id="search-visits-num">0 visits</strong>
+                  <span id="search-speed" class="search-speed">— visits/s</span>
+                </span>
               </div>
               <div id="search-status" class="search-status" role="status">대기 중 · 0.0초</div>
             </div>

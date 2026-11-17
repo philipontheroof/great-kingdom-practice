@@ -22,7 +22,7 @@ const settings={
  territory:true,numbers:true,
  batch:{scope:'branch',target:'missing',budget:{unit:'seconds',value:1.0}},
 };
-let lastPaint=0,doc=null,config=null,analyzing=false,analysisKind=null,moving=false,analysisController=null,preview=null,graphMode='win',saveTimer=null,local=null,localModel=null,batching=false,backendReady=true,onceNode=null,placeMode='alternate';
+let lastPaint=0,doc=null,config=null,analyzing=false,analysisKind=null,moving=false,analysisController=null,preview=null,graphMode='win',saveTimer=null,local=null,localModel=null,lastRuntimeStats=null,batching=false,backendReady=true,onceNode=null,placeMode='alternate';
 const isLeafNode=(d,id)=>!d?.nodes?.some?.(n=>n.parent===id);
 function applyPinsOnNavigation(){
  for(const k of Object.keys(settings.layers)){
@@ -123,9 +123,10 @@ async function search(node,budget,{onUpdate=()=>{},signal}={}){
 function acceptResult(result,node,model,execution){
  if(result.state_id!==node.position.state_id)throw Error('국면 해시가 일치하지 않습니다.');
  if(result.model&&result.model.id!==model)throw Error('선택 모델과 분석 모델이 다릅니다.');
+ if(result.stats)lastRuntimeStats=result.stats;
  node.analysis={...result,provider:result.execution==='browser'?result.backend:null,backend:execution};
  shown.set(node.id,node.analysis);
- if(execution==='local'&&result.backend&&$('runtime-note'))$('runtime-note').textContent=`이 기기에서 계산 · ${result.backend} · 서버 추론 없음`;
+ if(execution==='local'&&result.backend&&$('runtime-note'))$('runtime-note').textContent=`서버 추론 미사용 · 브라우저 로컬 전용 · ${result.backend.toUpperCase()} (${result.stats?.precision||'FP32'})`;
 }
 function setPlaceMode(mode){
  placeMode=mode;
@@ -388,15 +389,39 @@ function renderAnalysis(){
  if($('raw-value'))$('raw-value').textContent=analysis?.source==='rule'?'규칙 판정 · 종국의 실제 영토 차이 · 포위 승패는 집수와 별도':analysis?`모델 원평가 ${L.win?pct(values.rawWin):'(승률 숨김)'} · 집차이는 원평가에 덤 반영`:'모델 원평가와 탐색 결과를 구분해서 보여줘요.';
  if($('candidate-box'))$('candidate-box').hidden=!L.policy;
  if($('pv-box'))$('pv-box').hidden=!L.pv;
+ function candidateHistogramSvg(candidate,sharedMax,scoreMinDefault){
+  const dist=candidate?.score_distribution;
+  if(!Array.isArray(dist)||!dist.length)return '';
+  const scoreMin=Number.isFinite(candidate.score_min)?candidate.score_min:(Number.isFinite(scoreMinDefault)?scoreMinDefault:-((dist.length-1)/2));
+  const w=240,h=32,step=w/dist.length,max=Math.max(sharedMax,0.0001);
+  const zeroIdx=0-scoreMin;
+  const zeroX=(zeroIdx>=0&&zeroIdx<dist.length)?(zeroIdx+0.5)*step:null;
+  const bars=dist.map((p,i)=>{
+    if(p<=0.0005)return '';
+    const barH=Math.max(1,(p/max)*(h-4));
+    const score=scoreMin+i;
+    const fill=score>0?'#3b82f6':score<0?'#e07a5f':'#64748b';
+    return `<rect x="${(i*step).toFixed(2)}" y="${(h-2-barH).toFixed(2)}" width="${Math.max(0.7,step*0.88).toFixed(2)}" height="${barH.toFixed(2)}" fill="${fill}" fill-opacity="0.82"/>`;
+  }).join('');
+  const zeroLine=zeroX!==null?`<line x1="${zeroX.toFixed(2)}" y1="1" x2="${zeroX.toFixed(2)}" y2="${h-1}" stroke="#94a3b8" stroke-width="0.7" stroke-dasharray="2 1.5"/>`:'';
+  const expectedText=candidate.expected_score===null?'—':`${signed(candidate.expected_score)}집`;
+  return `<div class="candidate-hist-wrap"><div class="candidate-hist-meta"><span>MCTS 경로 예상 집차이 분포 (x: 집차이 · y: 확률)</span><span>평균 ${expectedText}</span></div><svg class="candidate-hist-svg" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" role="img" aria-label="후보수 예상 집차이 분포">${zeroLine}${bars}<line x1="0" y1="${h-2}" x2="${w}" y2="${h-2}" stroke="#cbd5e1" stroke-width="0.6"/></svg></div>`;
+ }
  const candidates=analysis?.mcts.candidates.slice(0,6)||[];
  if($('candidate-count'))$('candidate-count').textContent=candidates.length?`${analysis.mcts.candidates.length}개 후보`:'상위 후보';
  if($('candidates')){
   $('candidates').replaceChildren();
   if(!candidates.length){const p=document.createElement('p');p.className='empty-state';p.textContent='이 국면의 후보수가 없어요.';$('candidates').append(p);}
+  const best=candidates[0]||null;
+  const sharedHistMax=candidates.reduce((mx,c)=>Array.isArray(c.score_distribution)?Math.max(mx,...c.score_distribution):mx,0.0001);
   candidates.forEach((candidate,i)=>{
    const button=document.createElement('button');button.className='candidate-row';
    const probability=candidate.win_probability===null?null:analysis.perspective==='first'?candidate.win_probability:1-candidate.win_probability;
-   button.innerHTML=`<span><span class="candidate-rank">${i+1}</span><span class="candidate-coordinate">${coord(candidate.action)}<small>모델 선호도 ${pct(analysis.raw_network?.policy[candidate.action])}</small></span></span><span>${pct(candidate.visit_share)}<small>${candidate.visits} visits</small></span><span>${L.win?pct(probability):'—'}<small>Q ${signed(candidate.q===null?null:(analysis.perspective==='first'?1:-1)*candidate.q)} · 덤 전 ${L.margin?signed(candidate.expected_score===null?null:(analysis.perspective==='first'?1:-1)*candidate.expected_score):'—'}집</small></span>`;
+   const scoreDiff=(i>0&&candidate.expected_score!==null&&best?.expected_score!==null)?(candidate.expected_score-best.expected_score):null;
+   const winDiffPp=(i>0&&candidate.win_probability!==null&&best?.win_probability!==null)?((candidate.win_probability-best.win_probability)*100):null;
+   const diffLine=(i>0&&(scoreDiff!==null||winDiffPp!==null))?`<small class="candidate-diff">1순위 대비 ${scoreDiff!==null?`${signed(scoreDiff)}집`:'—'} · ${winDiffPp!==null?`${signed(winDiffPp)}%p`:'—'}</small>`:'';
+   const histHtml=L.margin?candidateHistogramSvg(candidate,sharedHistMax,analysis.raw_network?.score_min):'';
+   button.innerHTML=`<span><span class="candidate-rank">${i+1}</span><span class="candidate-coordinate">${coord(candidate.action)}<small>모델 선호도 ${pct(analysis.raw_network?.policy[candidate.action])}</small></span></span><span>${pct(candidate.visit_share)}<small>${candidate.visits} visits</small>${diffLine}</span><span>${L.win?pct(probability):'—'}<small>Q ${signed(candidate.q===null?null:(analysis.perspective==='first'?1:-1)*candidate.q)} · 덤 전 ${L.margin?signed(candidate.expected_score===null?null:(analysis.perspective==='first'?1:-1)*candidate.expected_score):'—'}집</small></span>${histHtml}`;
    button.addEventListener('click',()=>run(()=>place(candidate.action)));$('candidates').append(button);
   });
  }
@@ -429,10 +454,26 @@ function renderSettings(){
  const node=active(),a=nodeAnalysis(node),side=node?.position?.side_to_move;
  const stateText=batching?'일괄 분석 중':analyzing?(analysisKind==='ai'?`AI ${sideName(side)} 착수 탐색 중`:analysisKind==='continuous'?`${sideName(side)} 턴 계속 분석 중`:'현재 국면 분석 중'):a?'분석 완료':'분석 전';
  
- // 2.1 현재 분석 visit 수
+ // 2.1 현재 분석 visit 수 & 초당 visit 수
  const visitsNum=(a?.mcts?.root_visits||0);
+ const elapsedSec=(a?.cumulative_elapsed_seconds??a?.mcts?.elapsed_seconds??0);
+ const stats=a?.stats||lastRuntimeStats;
+ const vps=(stats?.visits_per_second>0)?stats.visits_per_second:(visitsNum>0&&elapsedSec>0?visitsNum/elapsedSec:null);
+ const vpsText=vps!==null?`${vps.toFixed(1)} visits/s`:'— visits/s';
  if($('search-visits-num'))$('search-visits-num').textContent=`${visitsNum.toLocaleString()} visits`;
- if($('search-status'))$('search-status').textContent=`${stateText} · ${visitsNum.toLocaleString()} visits · ${(a?.cumulative_elapsed_seconds??a?.mcts?.elapsed_seconds??0).toFixed(1)}초`;
+ if($('search-speed'))$('search-speed').textContent=vpsText;
+ if($('search-status'))$('search-status').textContent=`${stateText} · ${visitsNum.toLocaleString()} visits · ${elapsedSec.toFixed(1)}초 · ${vpsText}`;
+ if($('stat-backend'))$('stat-backend').textContent=stats?.backend?(stats.backend==='webgpu'?'WebGPU':`WASM (${stats.wasm_threads||1}스레드)`):(backend()==='local'?'초기화 중':'미사용');
+ if($('stat-precision'))$('stat-precision').textContent=stats?.precision||'FP32 (비양자화)';
+ if($('stat-cache')){
+  if(stats){
+   const totalLookups=(stats.raw_cache_hits||0)+(stats.raw_cache_misses||0);
+   const hitRate=totalLookups?` (${Math.round((stats.raw_cache_hits/totalLookups)*100)}%)`:'';
+   const mdl=stats.model_cache==='cache'?'모델 캐시':'모델 다운로드';
+   $('stat-cache').textContent=`${mdl} · 평가 ${stats.raw_cache_size}/${stats.raw_cache_max}${hitRate} · 트리 ${stats.tree_cache_size}/${stats.tree_cache_max}`;
+  }else{$('stat-cache').textContent='대기 중';}
+ }
+ if($('stat-speed'))$('stat-speed').textContent=vpsText;
  
  // 2.2 현재 국면 분석 버튼 & 분석 고정 토글
  if($('analyze-button')){$('analyze-button').textContent=analyzing?'분석 중지':'현재 국면 분석';$('analyze-button').classList.toggle('active',analyzing);$('analyze-button').disabled=moving||batching||!modelAvailable()||Boolean(node?.position?.result&&!analyzing);}
@@ -612,7 +653,8 @@ async function setupBackend(){
  if($('runtime-note'))$('runtime-note').textContent='모델을 이 기기에 불러오는 중…';
  local?.close();local=new LocalEngine();localModel=null;const current=local,manifest=staticOnly?await loadStaticManifest(config,model):await api(`browser-model/${model}`),status=await current.initialize(manifest,progress=>{if(local!==current)return;if($('runtime-note'))$('runtime-note').textContent=({runtime:'실행 파일을 불러오는 중…',model:'모델을 기기에 내려받는 중…',session:'기기에서 모델을 준비하는 중…'}[progress.stage]||'기기 내 엔진 준비 중…');});
  if(requested!==backend()||model!==doc.model_id||local!==current)return;
- localModel=model;if($('runtime-note'))$('runtime-note').textContent=`이 기기에서 계산 · ${status.execution_provider||status.backend||status.provider||'WebGPU / WASM'} · 서버 추론 없음`;
+ localModel=model;lastRuntimeStats=status.stats||null;
+ if($('runtime-note'))$('runtime-note').textContent=`서버 추론 미사용 · 브라우저 로컬 전용 · ${(status.execution_provider||status.backend||status.provider||'WebGPU / WASM').toUpperCase()}`;
  }else{if($('runtime-note'))$('runtime-note').textContent='연결된 Mac에서 계산';local?.close();local=null;localModel=null;}
  backendReady=true;if($('connection'))$('connection').textContent=requested==='local'?'기기 내 엔진 준비됨':`Mac ${config?.device?.toUpperCase?.()||'CPU'} 연결됨`;notice('');render();schedule();
  }catch(e){if(requested===backend()&&model===doc.model_id){backendReady=false;if($('connection'))$('connection').textContent='실행부 준비 실패';notice(e.message,true);render();}}
