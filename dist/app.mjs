@@ -1,6 +1,6 @@
-import {newStudy,addNode,pathTo,lineThrough,importDocument,blueEvaluation,studyForSave,resolveBranchLeaf,nextInBranch,branchLeaves} from './study.mjs';
+import {newStudy,addNode,pathTo,lineThrough,importDocument,blueEvaluation,studyForSave,resolveBranchLeaf,nextInBranch,branchLeaves,FORMAT} from './study.mjs';
 import {facts,stateGroups,territory,canonicalState,positionPayload} from './engine.mjs';
-import {boardSvg} from './board.mjs';
+import {boardSvg,candidateOutcome} from './board.mjs';
 import {STORE,persistStudy,retryAnalysis} from './client.mjs';
 import {PracticeControls,missingNodes,normalizeBudget,analysisFloor,budgetPayload,budgetReached,budgetLabel,BUDGET_RANGE,BUDGET_DEFAULT,TEMPERATURE_DEFAULT,normalizeTemperature,pickAiAction} from './controls.mjs';
 import {timelineSvg} from './timeline.mjs';
@@ -10,7 +10,13 @@ const staticOnly=document.documentElement?.dataset?.execution==='local';
 
 const $=id=>document.getElementById(id),controls=new PracticeControls(),shown=new Map(),SETTINGS='gk-practice-settings-v1';
 const SIDES=['first','second'];
+const STOP_REASON_LABELS={
+ proven_win:{label:'필승법 발견',cls:'win'},
+ proven_loss:{label:'필패 발견',cls:'loss'},
+ fully_explored:{label:'전체 탐색완료',cls:'complete'},
+};
 const settings={
+ theme:'system',
  analysisLimit:{unit:'seconds',value:2.0},
  analysisPinned:false,
  onceAutoShow:true,
@@ -18,12 +24,53 @@ const settings={
  pins:{ownership:true,policy:true,win:true,margin:true,pv:true,territory:true,numbers:true},
  play:{first:{unit:'seconds',value:2.0},second:{unit:'seconds',value:2.0}},
  playTemperature:TEMPERATURE_DEFAULT,
+ forceProvenWin:true,
+ ignoreProvenLoss:true,
  ponder:true,
  territory:true,numbers:true,
  batch:{scope:'branch',target:'missing',budget:{unit:'seconds',value:1.0}},
 };
-let lastPaint=0,doc=null,config=null,analyzing=false,analysisKind=null,moving=false,analysisController=null,preview=null,graphMode='win',saveTimer=null,local=null,localModel=null,lastRuntimeStats=null,batching=false,backendReady=true,onceNode=null,placeMode='alternate';
+let lastPaint=0,doc=null,config=null,analyzing=false,analysisKind=null,moving=false,analysisController=null,preview=null,graphMode='win',saveTimer=null,local=null,localModel=null,lastRuntimeStats=null,batching=false,backendReady=true,onceNode=null,placeMode='alternate',reading=null;
 const isLeafNode=(d,id)=>!d?.nodes?.some?.(n=>n.parent===id);
+const isReading=()=>Boolean(reading);
+const currentDoc=()=>reading?reading.doc:doc;
+const analysisKey=n=>{
+ if(!n)return null;
+ return reading&&reading.doc?.nodes?.includes?.(n)?`reading:${n.id}`:n.id;
+};
+function clearReadingShown(){
+ for(const k of [...shown.keys()])if(typeof k==='string'&&k.startsWith('reading:'))shown.delete(k);
+}
+function resolveTheme(mode=settings.theme){
+ if(mode==='dark'||mode==='light')return mode;
+ return globalThis.window?.matchMedia?.('(prefers-color-scheme: dark)')?.matches?'dark':'light';
+}
+function applyTheme(){
+ const mode=['system','light','dark'].includes(settings.theme)?settings.theme:'system';
+ const effective=resolveTheme(mode);
+ const root=document.documentElement;
+ if(root){
+  if(root.dataset){root.dataset.themeMode=mode;root.dataset.theme=effective;}
+  if(root.style)root.style.colorScheme=effective;
+ }
+ const meta=document.querySelector?.('meta[name="theme-color"]');
+ if(meta)meta.setAttribute?.('content',effective==='dark'?'#0f172a':'#172e45');
+ for(const m of ['system','light','dark']){
+  const btn=$(`theme-${m}`);
+  if(btn){btn.classList?.toggle?.('active',mode===m);btn.setAttribute?.('aria-pressed',String(mode===m));}
+ }
+}
+function effectiveStopReason(a){
+ if(!a)return null;
+ if(a.stop_reason&&STOP_REASON_LABELS[a.stop_reason])return a.stop_reason;
+ if(a.mcts?.fully_explored){
+  if(a.proven_winner&&a.proven_winner===a.perspective)return 'proven_win';
+  if(a.proven_winner&&a.proven_winner!==a.perspective)return 'proven_loss';
+  return 'fully_explored';
+ }
+ if(a.proven_winner&&a.proven_winner===a.perspective&&a.source!=='rule'&&(a.mcts?.root_visits||0)>0)return 'proven_win';
+ return null;
+}
 function applyPinsOnNavigation(){
  for(const k of Object.keys(settings.layers)){
   if(!settings.pins[k])settings.layers[k]=false;
@@ -31,14 +78,15 @@ function applyPinsOnNavigation(){
  if(!settings.pins.territory)settings.territory=false;
  if(!settings.pins.numbers)settings.numbers=false;
 }
-const canAiPlay=()=>placeMode==='alternate';
-const active=()=>doc?.nodes.find(n=>n.id===doc.selected);
+const canAiPlay=()=>!isReading()&&placeMode==='alternate';
+const active=()=>{const d=currentDoc();return d?.nodes.find(n=>n.id===d.selected);};
+const anchorNode=()=>doc?.nodes.find(n=>n.id===(reading?.anchorId??doc?.selected));
 const backend=()=>$('backend')?.value||(staticOnly?'local':'host');
 const modelAvailable=()=>backendReady&&Boolean(config?.models.some(m=>m.id===doc?.model_id))&&(backend()==='host'||localModel===doc?.model_id);
 const nodeAnalysis=n=>n?.analysis&&n.analysis.backend===backend()&&(!n.analysis.model||n.analysis.model.id===doc?.model_id)?n.analysis:null;
 const displayAnalysis=n=>{
  if(!n)return null;
- const a=shown.get(n.id)||nodeAnalysis(n);
+ const a=shown.get(analysisKey(n))||nodeAnalysis(n);
  if(!a)return null;
  if(a.backend!==backend())return null;
  if(a.model&&a.model.id!==doc?.model_id)return null;
@@ -66,6 +114,7 @@ function capture(){for(const n of doc.nodes){const a=nodeAnalysis(n);if(a)shown.
 function loadSettings(){
  let saved=null;try{saved=JSON.parse(localStorage.getItem(SETTINGS)||'null');}catch{saved=null;}
  if(!saved||typeof saved!=='object'||Array.isArray(saved))return;
+ if(['system','light','dark'].includes(saved.theme))settings.theme=saved.theme;
  settings.analysisLimit=normalizeBudget(saved.analysisLimit,{allowNone:true,fallback:'seconds'});
  if(typeof saved.analysisPinned==='boolean')settings.analysisPinned=saved.analysisPinned;
  if(typeof saved.onceAutoShow==='boolean')settings.onceAutoShow=saved.onceAutoShow;
@@ -75,6 +124,8 @@ function loadSettings(){
  }
  for(const s of SIDES)if(saved.play?.[s])settings.play[s]=normalizeBudget(saved.play[s],{fallback:'seconds'});
  if('playTemperature' in saved)settings.playTemperature=normalizeTemperature(saved.playTemperature,{fallback:TEMPERATURE_DEFAULT});
+ if(typeof saved.forceProvenWin==='boolean')settings.forceProvenWin=saved.forceProvenWin;
+ if(typeof saved.ignoreProvenLoss==='boolean')settings.ignoreProvenLoss=saved.ignoreProvenLoss;
  for(const k of ['territory','numbers','ponder'])if(typeof saved[k]==='boolean')settings[k]=saved[k];
  if(['branch','all'].includes(saved.batch?.scope))settings.batch.scope=saved.batch.scope;
  if(['missing','all'].includes(saved.batch?.target))settings.batch.target=saved.batch.target;
@@ -125,7 +176,7 @@ function acceptResult(result,node,model,execution){
  if(result.model&&result.model.id!==model)throw Error('선택 모델과 분석 모델이 다릅니다.');
  if(result.stats)lastRuntimeStats=result.stats;
  node.analysis={...result,provider:result.execution==='browser'?result.backend:null,backend:execution};
- shown.set(node.id,node.analysis);
+ shown.set(analysisKey(node),node.analysis);
  if(execution==='local'&&result.backend&&$('runtime-note'))$('runtime-note').textContent=`서버 추론 미사용 · 브라우저 로컬 전용 · ${result.backend.toUpperCase()} (${result.stats?.precision||'FP32'})`;
 }
 function setPlaceMode(mode){
@@ -134,11 +185,75 @@ function setPlaceMode(mode){
   cancel();controls.playing=false;
   notice(mode==='place-red'?'🔴 빨간 성 배치: 판을 클릭하면 빨간 성이 놓여집니다.':mode==='place-blue'?'🔵 파란 성 배치: 판을 클릭하면 파란 성이 놓여집니다.':mode==='place-neutral'?'⚪ 중립 성 배치: 판을 클릭하면 중립 성이 놓여집니다.':'🗑️ 성 제거: 판의 성을 클릭하면 제거됩니다.');
  }else{
-  if(controls.anyAI())controls.playing=true;
+  if(!isReading()&&controls.anyAI())controls.playing=true;
   notice('');
  }
  render();
- if(mode==='alternate')schedule();
+ if(!isReading()&&mode==='alternate')schedule();
+}
+function enterReadingMode(){
+ if(!doc||isReading())return;
+ const node=active();if(!node?.position)return;
+ cancel();controls.playing=false;preview=null;
+ clearReadingShown();
+ const rootAnalysis=nodeAnalysis(node);
+ reading={
+  anchorId:node.id,
+  anchorBranchLeaf:doc.branch_leaf,
+  doc:{
+   format:FORMAT,
+   ruleset_version:doc.ruleset_version,
+   setup:doc.setup,
+   model_id:doc.model_id,
+   selected:'r0',
+   branch_leaf:'r0',
+   nodes:[{id:'r0',parent:null,action:null,ply:node.ply,notes:'',position:node.position,analysis:rootAnalysis}],
+  },
+ };
+ if(rootAnalysis)shown.set('reading:r0',rootAnalysis);
+ notice('');
+ render();
+}
+function exitReadingMode(){
+ if(!reading)return;
+ cancel();preview=null;
+ clearReadingShown();
+ doc.selected=reading.anchorId;
+ doc.branch_leaf=resolveBranchLeaf(doc,doc.selected,reading.anchorBranchLeaf);
+ reading=null;
+ if(placeMode==='alternate'&&controls.anyAI())controls.playing=true;
+ notice('');
+ render();
+ if(placeMode==='alternate')schedule();
+}
+function resetReadingMode(){
+ if(!reading)return;
+ cancel();preview=null;
+ clearReadingShown();
+ const r0=reading.doc.nodes[0];
+ reading.doc.nodes=[r0];
+ reading.doc.selected=r0.id;
+ reading.doc.branch_leaf=r0.id;
+ if(r0.analysis)shown.set(`reading:${r0.id}`,r0.analysis);
+ render();
+}
+function selectReadingNode(id){
+ if(!reading)return;
+ cancel();preview=null;
+ applyPinsOnNavigation();
+ reading.doc.selected=id;
+ reading.doc.branch_leaf=resolveBranchLeaf(reading.doc,id,reading.doc.branch_leaf);
+ render();
+}
+function readingPrev(){
+ if(!reading)return;
+ const cur=active();
+ if(cur?.parent)selectReadingNode(cur.parent);
+}
+function readingNext(){
+ if(!reading)return;
+ const nxt=nextInBranch(reading.doc,reading.doc.selected,reading.doc.branch_leaf);
+ if(nxt)selectReadingNode(nxt.id);
 }
 
 function makeNextPosition(parentPos,action,customSide=null){
@@ -215,25 +330,27 @@ async function setTurnSide(side){
  if(node.position.side_to_move===side)return;
  cancel();controls.playing=false;
  node.position=await finalizePosition({...node.position,side_to_move:side,legal_actions:facts({board:node.position.board,side_to_move:side,komi:doc.setup.komi,result:node.position.result,ruleset_version:doc.ruleset_version}).legal_actions});
- node.analysis=null;shown.delete(node.id);onceNode=null;
- if(placeMode==='alternate'&&controls.anyAI())controls.playing=true;
- save();render();
- if(placeMode==='alternate')schedule();
+ node.analysis=null;shown.delete(analysisKey(node));onceNode=null;
+ if(!isReading()&&placeMode==='alternate'&&controls.anyAI())controls.playing=true;
+ if(!isReading())save();
+ render();
+ if(!isReading()&&placeMode==='alternate')schedule();
 }
 
 async function startAnalysis({ai=false,kind=ai?'ai':'once'}={}){
  if(!active()||moving||batching||!modelAvailable()||(ai&&!canAiPlay()))return;
- cancel();const node=active(),study=doc,model=doc.model_id,execution=backend(),token=controls.begin(node.id,model,execution),controller=new AbortController();analysisController=controller;analyzing=true;analysisKind=kind;
+ cancel();const node=active(),nodeKey=analysisKey(node),readingRef=reading,study=doc,model=doc.model_id,execution=backend(),token=controls.begin(nodeKey,model,execution),controller=new AbortController();analysisController=controller;analyzing=true;analysisKind=kind;
  const ponder=kind==='ponder',budget=ai?settings.play[node.position.side_to_move]:ponder?{unit:'none',value:null}:settings.analysisLimit;if(!ponder)render();else renderSettings();
- const valid=()=>study===doc&&controls.accepts(token,doc.selected,doc.model_id,backend());let result;
+ const valid=()=>study===doc&&reading===readingRef&&controls.accepts(token,analysisKey(active()),doc.model_id,backend());let result;
  try{result=await search(node,budget,{signal:controller.signal,onUpdate:r=>{if(valid()&&!ponder){acceptResult(r,node,model,execution);if(r.done||Date.now()-lastPaint>=180){lastPaint=Date.now();render();}}}});
  if(!valid())return;if(!ponder){acceptResult(result,node,model,execution);notice('');}
  }catch(error){if(error.name!=='AbortError'&&valid()&&!ponder)notice(error.message,true);return;}
  finally{analyzing=false;analysisKind=null;analysisController=null;if(valid()){if(!ponder)render();else renderSettings();}}
- const aiAction=ai?pickAiAction(result,settings.playTemperature):null;
+ const aiAction=ai?pickAiAction(result,settings.playTemperature,{ignoreProvenLoss:settings.ignoreProvenLoss,forceProvenWin:settings.forceProvenWin}):null;
  if(ai&&valid()&&isLeafNode(doc,node.id)&&controls.aiTurn(node.position)&&aiAction!==null&&aiAction!==undefined){await place(aiAction,true);}
 }
 function schedule(){
+ if(isReading())return;
  const n=active();if(!n)return;if(n.position.result){render();return;}
  if(!canAiPlay())return;
  const isLeaf=isLeafNode(doc,n.id);
@@ -249,6 +366,7 @@ function schedule(){
 }
 async function selectNode(id){
  cancel();
+ if(reading){clearReadingShown();reading=null;}
  placeMode='alternate';
  applyPinsOnNavigation();
  if(onceNode!==id)onceNode=null;
@@ -259,26 +377,44 @@ async function selectNode(id){
  schedule();
 }
 async function place(action,fromAI=false){
- const node=active();if(moving||preview||node.position.result)return;
- if(!fromAI&&controls.aiTurn(node.position)&&placeMode==='alternate')return notice('AI 차례입니다. AI 착수 토글을 끄면 직접 둘 수 있어요.');
+ const node=active(),targetDoc=currentDoc(),readingRef=reading;if(moving||preview||node.position.result)return;
+ if(!isReading()&&!fromAI&&controls.aiTurn(node.position)&&placeMode==='alternate')return notice('AI 차례입니다. AI 착수 토글을 끄면 직접 둘 수 있어요.');
  if(action<81&&!node.position.legal_actions.includes(action))return notice('그 칸에는 둘 수 없어요.',true);
  cancel();const token=controls.epoch,study=doc;moving=true;
  render();
  try{
   let next;
-  if(backend()==='host'&&!staticOnly&&action<=81){
-   next=await position({...positionRequest(node),actions:[...pathTo(doc,node.id),action]});
+  const fullPath=readingRef?[...pathTo(doc,readingRef.anchorId),...pathTo(readingRef.doc,node.id)]:pathTo(doc,node.id);
+  const canHostReplay=backend()==='host'&&!staticOnly&&action<=81&&fullPath.every(a=>a<=81);
+  if(canHostReplay){
+   next=await position({...positionRequest(node),actions:[...fullPath,action]});
   }else{
    next=await finalizePosition(makeNextPosition(node.position,action));
   }
-  if(study!==doc||token!==controls.epoch)return;
+  if(study!==doc||reading!==readingRef||token!==controls.epoch)return;
   applyPinsOnNavigation();
-  addNode(doc,node.id,action,next);doc.branch_leaf=resolveBranchLeaf(doc,doc.selected,doc.branch_leaf);onceNode=null;save();notice('');
+  addNode(targetDoc,node.id,action,next);targetDoc.branch_leaf=resolveBranchLeaf(targetDoc,targetDoc.selected,targetDoc.branch_leaf);onceNode=null;
+  if(!readingRef)save();
+  notice('');
  }finally{moving=false;if(token===controls.epoch)render();}
- if(token===controls.epoch&&placeMode==='alternate')schedule();
+ if(!readingRef&&token===controls.epoch&&placeMode==='alternate')schedule();
 }
 
 // ---- Rendering ------------------------------------------------------------
+function renderReadingBar(){
+ const on=isReading();
+ document.body?.classList?.toggle?.('reading-mode',on);
+ $('reading-toggle')?.classList?.toggle?.('active',on);
+ $('reading-toggle')?.setAttribute?.('aria-pressed',String(on));
+ if($('reading-bar'))$('reading-bar').hidden=!on;
+ if(!on)return;
+ const cur=active(),anc=anchorNode();
+ const delta=Math.max(0,(cur?.ply??0)-(anc?.ply??0));
+ if($('reading-status'))$('reading-status').textContent=delta>0?`원래 국면에서 +${delta}수 진행 중`:'원래 국면 · 판을 눌러 임시 돌을 놓아보세요';
+ if($('reading-prev'))$('reading-prev').disabled=!cur?.parent;
+ if($('reading-next'))$('reading-next').disabled=!nextInBranch(reading.doc,reading.doc.selected,reading.doc.branch_leaf);
+ if($('reading-reset'))$('reading-reset').disabled=(reading.doc.nodes?.length||0)<=1;
+}
 function renderPlacementBar(){
  const side=active()?.position?.side_to_move||'first';
  $('mode-alternate')?.classList?.toggle?.('active',placeMode==='alternate');
@@ -303,16 +439,21 @@ function renderPlacementBar(){
   rBtn.classList?.toggle?.('side-red',side==='second');
   rBtn.setAttribute?.('aria-pressed',String(side==='second'));
  }
+ renderReadingBar();
 }
 function renderBoard(){
  const node=active(),p=preview?.position||node.position,visible=visibleAnalysis(),L=settings.layers;
+ const onReading=isReading();
+ const anchorActions=onReading?pathTo(doc,reading.anchorId):pathTo(doc,node.id);
+ const readingActions=onReading?pathTo(reading.doc,node.id):[];
  const boardEl=$('board');
  if(boardEl){
   boardEl.classList?.toggle?.('placing-red',placeMode==='place-red');
   boardEl.classList?.toggle?.('placing-blue',placeMode==='place-blue');
   boardEl.classList?.toggle?.('placing-neutral',placeMode==='place-neutral');
   boardEl.classList?.toggle?.('placing-remove',placeMode==='remove');
-  boardEl.innerHTML=boardSvg(p,{actions:[...pathTo(doc,node.id),...(preview?.actions||[])],lastAction:preview?.actions.at(-1)??node.action,analysis:preview?null:visible,showTerritory:settings.territory,showOwnership:L.ownership&&Boolean(visible),showCandidates:L.policy&&Boolean(visible)&&!preview,showPV:L.pv&&Boolean(visible)&&!preview,showNumbers:settings.numbers});
+  const lastAction=preview?.actions.at(-1)??(onReading?(node.parent!==null?node.action:anchorNode()?.action):node.action);
+  boardEl.innerHTML=boardSvg(p,{actions:[...anchorActions,...readingActions,...(preview?.actions||[])],lastAction,analysis:preview?null:visible,showTerritory:settings.territory,showOwnership:L.ownership&&Boolean(visible),showCandidates:L.policy&&Boolean(visible)&&!preview,showPV:L.pv&&Boolean(visible)&&!preview,showNumbers:settings.numbers,readingMode:onReading,readingStartIndex:onReading?anchorActions.length:null});
   const svg=boardEl.querySelector?.('svg');
   if(svg){
    svg.classList?.toggle?.('placing-red',placeMode==='place-red');
@@ -327,13 +468,14 @@ function renderBoard(){
  if($('blue-player'))$('blue-player').textContent=controls.aiSide.first?'AI':'사람';
  if($('red-player'))$('red-player').textContent=controls.aiSide.second?'AI':'사람';
  if($('turn-dot'))$('turn-dot').className=`turn-dot ${p.side_to_move==='first'?'blue':'red'}`;
- if($('turn-label'))$('turn-label').textContent=preview?`예상 수순 ${preview.actions.length}수`:placeMode==='place-red'?'빨간 성 배치 모드 · 판을 클릭하면 빨간 성이 놓여요':placeMode==='place-blue'?'파란 성 배치 모드 · 판을 클릭하면 파란 성이 놓여요':placeMode==='place-neutral'?'중립 성 배치 모드 · 판을 클릭하면 중립 성이 놓여요':p.result?`${p.result.winner==='first'?'파란':'빨간'} 성 승리 · ${p.result.reason==='siege'?'포위':p.result.reason==='pass_score'?'연속 패스 종국':'영토 점수'}`:`${p.previous_move_was_pass?`${p.side_to_move==='second'?'파란':'빨간'} 성 패스 · `:''}${p.side_to_move==='first'?'파란':'빨간'} 성 차례${controls.aiTurn(p)?' · AI 생각 중':''}`;
- if($('ply-label'))$('ply-label').textContent=`${node.ply}수째`;
+ if($('turn-label'))$('turn-label').textContent=preview?`예상 수순 ${preview.actions.length}수`:placeMode==='place-red'?'빨간 성 배치 모드 · 판을 클릭하면 빨간 성이 놓여요':placeMode==='place-blue'?'파란 성 배치 모드 · 판을 클릭하면 파란 성이 놓여요':placeMode==='place-neutral'?'중립 성 배치 모드 · 판을 클릭하면 중립 성이 놓여요':p.result?`${p.result.winner==='first'?'파란':'빨간'} 성 승리 · ${p.result.reason==='siege'?'포위':p.result.reason==='pass_score'?'연속 패스 종국':'영토 점수'}`:`${onReading?'💭 수읽기 · ':''}${p.previous_move_was_pass?`${p.side_to_move==='second'?'파란':'빨간'} 성 패스 · `:''}${p.side_to_move==='first'?'파란':'빨간'} 성 차례${!onReading&&controls.aiTurn(p)?' · AI 생각 중':''}`;
+ if($('ply-label'))$('ply-label').textContent=onReading?`${node.ply}수째 (수읽기)`:`${node.ply}수째`;
  if($('nav-label'))$('nav-label').textContent=`${node.ply}수`;
- if($('first'))$('first').disabled=$('previous').disabled=node.parent===null;
- if($('next'))$('next').disabled=$('last').disabled=!nextInBranch(doc,node.id,doc.branch_leaf);
+ if($('first'))$('first').disabled=$('previous').disabled=onReading||node.parent===null;
+ if($('next'))$('next').disabled=$('last').disabled=onReading||!nextInBranch(doc,node.id,doc.branch_leaf);
  const passCand=(L.policy&&visible&&!preview)?(visible.mcts?.candidates||[]).find(c=>c.action===81&&c.visits>0):null;
- if($('pass')){$('pass').disabled=Boolean(p.result||preview||moving||controls.aiTurn(p)||(backend()==='local'&&!local)||placeMode!=='alternate');$('pass').textContent=passCand?`패스 (${(passCand.visit_share*100).toFixed(1)}%)`:'패스';}
+ const passOut=passCand?candidateOutcome(passCand,visible):null;
+ if($('pass')){$('pass').disabled=Boolean(p.result||preview||moving||(!onReading&&controls.aiTurn(p))||(backend()==='local'&&!local)||placeMode!=='alternate');$('pass').textContent=passCand?`패스 (${passOut==='win'?'필승 · ':passOut==='loss'?'필패 · ':''}${(passCand.visit_share*100).toFixed(1)}%)`:'패스';}
  if($('preview-exit'))$('preview-exit').hidden=!preview;
  if($('preview-label'))$('preview-label').hidden=!(settings.layers.ownership&&visible);
 
@@ -386,6 +528,13 @@ function renderAnalysis(){
  if($('margin-caption'))$('margin-caption').textContent=analysis?.source==='rule'?'종국 영토 차이':'예상 집차이';
  if($('margin-value'))$('margin-value').textContent=values.margin===null?'—':`${signed(values.margin)}집`;
  if($('visits-value'))$('visits-value').textContent=analysis?analysis.mcts.root_visits.toLocaleString():'—';
+ const stopReason=effectiveStopReason(analysis);
+ const stopInfo=stopReason?STOP_REASON_LABELS[stopReason]:null;
+ if($('analysis-stop-reason')){
+  $('analysis-stop-reason').hidden=!stopInfo;
+  $('analysis-stop-reason').textContent=stopInfo?stopInfo.label:'';
+  $('analysis-stop-reason').className=`stop-reason-badge${stopInfo?` ${stopInfo.cls}`:''}`;
+ }
  if($('raw-value'))$('raw-value').textContent=analysis?.source==='rule'?'규칙 판정 · 종국의 실제 영토 차이 · 포위 승패는 집수와 별도':analysis?`모델 원평가 ${L.win?pct(values.rawWin):'(승률 숨김)'} · 집차이는 원평가에 덤 반영`:'모델 원평가와 탐색 결과를 구분해서 보여줘요.';
  if($('candidate-box'))$('candidate-box').hidden=!L.policy;
  if($('pv-box'))$('pv-box').hidden=!L.pv;
@@ -407,7 +556,7 @@ function renderAnalysis(){
   const expectedText=candidate.expected_score===null?'—':`${signed(candidate.expected_score)}집`;
   return `<div class="candidate-hist-wrap"><div class="candidate-hist-meta"><span>MCTS 경로 예상 집차이 분포 (x: 집차이 · y: 확률)</span><span>평균 ${expectedText}</span></div><svg class="candidate-hist-svg" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" role="img" aria-label="후보수 예상 집차이 분포">${zeroLine}${bars}<line x1="0" y1="${h-2}" x2="${w}" y2="${h-2}" stroke="#cbd5e1" stroke-width="0.6"/></svg></div>`;
  }
- const candidates=analysis?.mcts.candidates.slice(0,6)||[];
+ const candidates=analysis?.mcts.candidates.slice(0,8)||[];
  if($('candidate-count'))$('candidate-count').textContent=candidates.length?`${analysis.mcts.candidates.length}개 후보`:'상위 후보';
  if($('candidates')){
   $('candidates').replaceChildren();
@@ -415,13 +564,15 @@ function renderAnalysis(){
   const best=candidates[0]||null;
   const sharedHistMax=candidates.reduce((mx,c)=>Array.isArray(c.score_distribution)?Math.max(mx,...c.score_distribution):mx,0.0001);
   candidates.forEach((candidate,i)=>{
-   const button=document.createElement('button');button.className='candidate-row';
+   const outcome=candidateOutcome(candidate,analysis);
+   const button=document.createElement('button');button.className=`candidate-row${outcome==='win'?' proven-win':outcome==='loss'?' proven-loss':''}`;
    const probability=candidate.win_probability===null?null:analysis.perspective==='first'?candidate.win_probability:1-candidate.win_probability;
    const scoreDiff=(i>0&&candidate.expected_score!==null&&best?.expected_score!==null)?(candidate.expected_score-best.expected_score):null;
    const winDiffPp=(i>0&&candidate.win_probability!==null&&best?.win_probability!==null)?((candidate.win_probability-best.win_probability)*100):null;
    const diffLine=(i>0&&(scoreDiff!==null||winDiffPp!==null))?`<small class="candidate-diff">1순위 대비 ${scoreDiff!==null?`${signed(scoreDiff)}집`:'—'} · ${winDiffPp!==null?`${signed(winDiffPp)}%p`:'—'}</small>`:'';
+   const provenTag=outcome==='win'?'<span class="proven-badge win">필승</span>':outcome==='loss'?'<span class="proven-badge loss">필패</span>':'';
    const histHtml=L.margin?candidateHistogramSvg(candidate,sharedHistMax,analysis.raw_network?.score_min):'';
-   button.innerHTML=`<span><span class="candidate-rank">${i+1}</span><span class="candidate-coordinate">${coord(candidate.action)}<small>모델 선호도 ${pct(analysis.raw_network?.policy[candidate.action])}</small></span></span><span>${pct(candidate.visit_share)}<small>${candidate.visits} visits</small>${diffLine}</span><span>${L.win?pct(probability):'—'}<small>Q ${signed(candidate.q===null?null:(analysis.perspective==='first'?1:-1)*candidate.q)} · 덤 전 ${L.margin?signed(candidate.expected_score===null?null:(analysis.perspective==='first'?1:-1)*candidate.expected_score):'—'}집</small></span>${histHtml}`;
+   button.innerHTML=`<span><span class="candidate-rank">${i+1}</span><span class="candidate-coordinate">${coord(candidate.action)}${provenTag}<small>모델 선호도 ${pct(analysis.raw_network?.policy[candidate.action])}</small></span></span><span>${pct(candidate.visit_share)}<small>${candidate.visits} visits</small>${diffLine}</span><span>${L.win?pct(probability):'—'}<small>Q ${signed(candidate.q===null?null:(analysis.perspective==='first'?1:-1)*candidate.q)} · 덤 전 ${L.margin?signed(candidate.expected_score===null?null:(analysis.perspective==='first'?1:-1)*candidate.expected_score):'—'}집</small></span>${histHtml}`;
    button.addEventListener('click',()=>run(()=>place(candidate.action)));$('candidates').append(button);
   });
  }
@@ -460,9 +611,16 @@ function renderSettings(){
  const stats=a?.stats||lastRuntimeStats;
  const vps=(stats?.visits_per_second>0)?stats.visits_per_second:(visitsNum>0&&elapsedSec>0?visitsNum/elapsedSec:null);
  const vpsText=vps!==null?`${vps.toFixed(1)} visits/s`:'— visits/s';
+ const stopReason=effectiveStopReason(a);
+ const stopInfo=stopReason?STOP_REASON_LABELS[stopReason]:null;
  if($('search-visits-num'))$('search-visits-num').textContent=`${visitsNum.toLocaleString()} visits`;
+ if($('search-stop-reason')){
+  $('search-stop-reason').hidden=!stopInfo;
+  $('search-stop-reason').textContent=stopInfo?stopInfo.label:'';
+  $('search-stop-reason').className=`stop-reason-badge${stopInfo?` ${stopInfo.cls}`:''}`;
+ }
  if($('search-speed'))$('search-speed').textContent=vpsText;
- if($('search-status'))$('search-status').textContent=`${stateText} · ${visitsNum.toLocaleString()} visits · ${elapsedSec.toFixed(1)}초 · ${vpsText}`;
+ if($('search-status'))$('search-status').textContent=`${stateText}${stopInfo?` (${stopInfo.label})`:''} · ${visitsNum.toLocaleString()} visits · ${elapsedSec.toFixed(1)}초 · ${vpsText}`;
  if($('stat-backend'))$('stat-backend').textContent=stats?.backend?(stats.backend==='webgpu'?'WebGPU':`WASM (${stats.wasm_threads||1}스레드)`):(backend()==='local'?'초기화 중':'미사용');
  if($('stat-precision'))$('stat-precision').textContent=stats?.precision||'FP32 (비양자화)';
  if($('stat-cache')){
@@ -561,6 +719,8 @@ function renderSettings(){
  }
  const tVal=$('play-temperature');
  if(tVal&&document.activeElement!==tVal)tVal.value=String(settings.playTemperature);
+ setSwitch('play-force-proven-win',settings.forceProvenWin);
+ setSwitch('play-ignore-proven-loss',settings.ignoreProvenLoss);
  setSwitch('play-ponder',settings.ponder);
  if($('ponder-hint'))$('ponder-hint').textContent=settings.ponder?'무제한(♾️) 자동 분석 연동 중 · 내 차례에도 계속 탐색합니다.':'켜면 분석 제한이 무제한(♾️)으로 설정되어 내 차례에도 계속 자동 분석합니다.';
  const isLeaf=isLeafNode(doc,node?.id);
@@ -602,38 +762,57 @@ function renderBranchBar(){
   bar.append(b);
  });
 }
-function renderTimeline(){const viewport=$('timeline');if(!viewport)return;const left=viewport.scrollLeft;doc.branch_leaf=resolveBranchLeaf(doc,doc.selected,doc.branch_leaf);viewport.innerHTML=timelineSvg(doc,graphAnalysis,graphMode,doc.branch_leaf);viewport.scrollLeft=left;renderBranchBar();renderMemos();}
+function renderTimeline(){const viewport=$('timeline');if(!viewport)return;const left=viewport.scrollLeft;doc.branch_leaf=resolveBranchLeaf(doc,doc.selected,doc.branch_leaf);viewport.innerHTML=timelineSvg(doc,graphAnalysis,graphMode,doc.branch_leaf,reading);viewport.scrollLeft=left;renderBranchBar();renderMemos();}
 function render(){if(!active()?.position)return;
+ applyTheme();
  if($('title')&&document.activeElement!==$('title'))$('title').value=doc.title;
- if($('notes')&&document.activeElement!==$('notes'))$('notes').value=active().notes||'';
+ if($('notes')){
+  $('notes').disabled=isReading();
+  if(isReading())$('notes').value='';
+  else if(document.activeElement!==$('notes'))$('notes').value=active().notes||'';
+ }
  if($('setup-label'))$('setup-label').textContent=doc.setup.neutral===null?'중립 성 없음':`중립 성 ${doc.setup.neutral.map(n=>n+1).join('·')}`;
  if($('komi-label'))$('komi-label').textContent=`덤 ${doc.setup.komi}`;
  renderSettings();renderPlacementBar();renderBoard();renderAnalysis();renderTimeline();
 }
-async function previewPV(count){const a=visibleAnalysis();if(!a||moving)return;const epoch=controls.epoch,node=active(),actions=a.mcts.principal_variation.slice(0,count),p=await position({...positionRequest(),actions:[...pathTo(doc,node.id),...actions]});if(epoch!==controls.epoch)return;preview={position:p,actions};renderBoard();}
+async function previewPV(count){
+ const a=visibleAnalysis();if(!a||moving)return;
+ const epoch=controls.epoch,node=active(),actions=a.mcts.principal_variation.slice(0,count);
+ const fullPath=isReading()?[...pathTo(doc,reading.anchorId),...pathTo(reading.doc,node.id)]:pathTo(doc,node.id);
+ let p;
+ if(backend()==='host'&&!staticOnly&&fullPath.every(x=>x<=81)&&actions.every(x=>x<=81)){
+  p=await position({...positionRequest(),actions:[...fullPath,...actions]});
+ }else{
+  p=node.position;
+  for(const act of actions){if(p.result)break;p=await finalizePosition(makeNextPosition(p,act));}
+ }
+ if(epoch!==controls.epoch)return;
+ preview={position:p,actions};renderBoard();
+}
 async function importPV(){
  const actions=visibleAnalysis()?.mcts?.principal_variation?.slice(0,16)||[];
  if(!actions.length)return;
  cancel();
  moving=true;
- let parentId=doc.selected;
+ const targetDoc=currentDoc();
+ let parentId=targetDoc.selected;
  try{
   for(const a of actions){
-   const parentNode=doc.nodes.find(n=>n.id===parentId);
+   const parentNode=targetDoc.nodes.find(n=>n.id===parentId);
    if(!parentNode||parentNode.position.result)break;
    if(a<81&&!parentNode.position.legal_actions.includes(a))break;
    const next=await finalizePosition(makeNextPosition(parentNode.position,a));
-   const child=addNode(doc,parentId,a,next);
+   const child=addNode(targetDoc,parentId,a,next);
    parentId=child.id;
   }
-  doc.branch_leaf=resolveBranchLeaf(doc,doc.selected,doc.branch_leaf);
+  targetDoc.branch_leaf=resolveBranchLeaf(targetDoc,targetDoc.selected,targetDoc.branch_leaf);
   onceNode=null;
-  save();
-  notice(`${actions.length}수의 예상 수순을 분기로 가져왔습니다.`);
+  if(!isReading()){save();notice(`${actions.length}수의 예상 수순을 분기로 가져왔습니다.`);}
+  else notice(`${actions.length}수의 예상 수순을 수읽기 분기에 추가했습니다.`);
  }finally{
   moving=false;
   render();
-  schedule();
+  if(!isReading())schedule();
  }
 }
 function populateModels(){
@@ -684,8 +863,8 @@ async function rebuildStudy(imported){
  }
  return {...imported,nodes};
 }
-async function loadStudy(value,{initializeModel=true,preserveCurrent=true}={}){const imported=importDocument(value);clearTimeout(saveTimer);if(preserveCurrent&&!saveNow())throw Error('현재 기보를 내보내기로 보관해 주세요.');cancel();controls.playing=false;const epoch=controls.epoch,rebuilt=await rebuildStudy(imported);if(epoch!==controls.epoch)return;doc={...rebuilt,storage_id:value.storage_id||crypto.randomUUID()};doc.branch_leaf=resolveBranchLeaf(doc,doc.selected,doc.branch_leaf);placeMode='alternate';onceNode=null;shown.clear();populateModels();render();save();if(initializeModel&&backend()==='local'&&localModel!==doc.model_id)await setupBackend();else if(initializeModel)schedule();}
-async function createGame(setup,{keepPlaceMode=false}={}){cancel();controls.playing=false;const epoch=controls.epoch,p=await position({ruleset_version:doc?.ruleset_version||'gk-v2.2',setup,actions:[]});if(epoch!==controls.epoch)return;clearTimeout(saveTimer);if(!saveNow())throw Error('현재 기보를 먼저 보관해 주세요.');const model=doc?.model_id||config?.models?.[0]?.id||null;doc={...newStudy(setup,p),storage_id:crypto.randomUUID(),model_id:model};doc.branch_leaf=resolveBranchLeaf(doc,doc.selected,doc.branch_leaf);doc.title=`${new Date().toLocaleDateString('ko-KR',{month:'long',day:'numeric'})}의 연습`;if(!keepPlaceMode)placeMode='alternate';onceNode=null;shown.clear();if(placeMode==='alternate'&&controls.anyAI())controls.playing=true;populateModels();save();render();if($('new-dialog'))$('new-dialog').close();if(placeMode==='alternate')schedule();}
+async function loadStudy(value,{initializeModel=true,preserveCurrent=true}={}){const imported=importDocument(value);clearTimeout(saveTimer);if(preserveCurrent&&!saveNow())throw Error('현재 기보를 내보내기로 보관해 주세요.');cancel();controls.playing=false;const epoch=controls.epoch,rebuilt=await rebuildStudy(imported);if(epoch!==controls.epoch)return;reading=null;clearReadingShown();doc={...rebuilt,storage_id:value.storage_id||crypto.randomUUID()};doc.branch_leaf=resolveBranchLeaf(doc,doc.selected,doc.branch_leaf);placeMode='alternate';onceNode=null;shown.clear();populateModels();render();save();if(initializeModel&&backend()==='local'&&localModel!==doc.model_id)await setupBackend();else if(initializeModel)schedule();}
+async function createGame(setup,{keepPlaceMode=false}={}){cancel();controls.playing=false;const epoch=controls.epoch,p=await position({ruleset_version:doc?.ruleset_version||'gk-v2.2',setup,actions:[]});if(epoch!==controls.epoch)return;clearTimeout(saveTimer);if(!saveNow())throw Error('현재 기보를 먼저 보관해 주세요.');const model=doc?.model_id||config?.models?.[0]?.id||null;reading=null;clearReadingShown();doc={...newStudy(setup,p),storage_id:crypto.randomUUID(),model_id:model};doc.branch_leaf=resolveBranchLeaf(doc,doc.selected,doc.branch_leaf);doc.title=`${new Date().toLocaleDateString('ko-KR',{month:'long',day:'numeric'})}의 연습`;if(!keepPlaceMode)placeMode='alternate';onceNode=null;shown.clear();if(placeMode==='alternate'&&controls.anyAI())controls.playing=true;populateModels();save();render();if($('new-dialog'))$('new-dialog').close();if(placeMode==='alternate')schedule();}
 function showNew(){if(!$('recent-studies'))return;$('recent-studies').replaceChildren();for(const entry of library()){const b=document.createElement('button');b.type='button';b.textContent=`${entry.title||'이름 없는 연습'} · ${entry.nodes.length}개 국면`;b.addEventListener('click',()=>run(async()=>{await loadStudy(entry);$('new-dialog').close();}));$('recent-studies').append(b);}$('new-dialog').showModal();}
 async function batch(){if(batching){cancel();render();return;}if(!modelAvailable())return;
  cancel();controls.playing=false;
@@ -852,6 +1031,8 @@ for(const s of SIDES){
 }
 $('ai-resume')?.addEventListener('click',()=>{cancel();render();schedule();});
 $('play-temperature')?.addEventListener('change',()=>{settings.playTemperature=normalizeTemperature($('play-temperature').value,{fallback:TEMPERATURE_DEFAULT});saveSettings();render();});
+$('play-force-proven-win')?.addEventListener('change',e=>{settings.forceProvenWin=e.target.checked;saveSettings();render();});
+$('play-ignore-proven-loss')?.addEventListener('change',e=>{settings.ignoreProvenLoss=e.target.checked;saveSettings();render();});
 $('play-ponder')?.addEventListener('change',e=>{
  settings.ponder=e.target.checked;
  if(settings.ponder){
@@ -877,22 +1058,37 @@ const batchBudgetChanged=()=>{settings.batch.budget=readBudget('batch',settings.
 $('batch-unit')?.addEventListener('change',batchBudgetChanged);$('batch-value')?.addEventListener('change',batchBudgetChanged);
 $('batch-start')?.addEventListener('click',()=>run(batch));
 
+// 테마 및 수읽기 모드
+for(const mode of ['system','light','dark']){
+ $(`theme-${mode}`)?.addEventListener('click',()=>{settings.theme=mode;applyTheme();saveSettings();});
+}
+try{
+ const mq=globalThis.window?.matchMedia?.('(prefers-color-scheme: dark)');
+ mq?.addEventListener?.('change',()=>{if(settings.theme==='system')applyTheme();});
+}catch{/* optional */}
+$('reading-toggle')?.addEventListener('click',()=>run(()=>isReading()?exitReadingMode():enterReadingMode()));
+$('reading-prev')?.addEventListener('click',()=>run(()=>readingPrev()));
+$('reading-next')?.addEventListener('click',()=>run(()=>readingNext()));
+$('reading-reset')?.addEventListener('click',()=>run(()=>resetReadingMode()));
+$('reading-exit')?.addEventListener('click',()=>run(()=>exitReadingMode()));
+
 // 기타
 $('backend')?.addEventListener('change',()=>run(setupBackend));
-$('model-select')?.addEventListener('change',()=>{cancel();controls.playing=false;doc.model_id=$('model-select').value||null;populateModels();save();render();run(setupBackend);});
+$('model-select')?.addEventListener('change',()=>{cancel();controls.playing=false;reading=null;clearReadingShown();doc.model_id=$('model-select').value||null;populateModels();save();render();run(setupBackend);});
 $('first')?.addEventListener('click',()=>run(()=>selectNode(doc.nodes[0].id)));$('previous')?.addEventListener('click',()=>{if(active().parent)run(()=>selectNode(active().parent));});$('next')?.addEventListener('click',()=>{const n=nextInBranch(doc,doc.selected,doc.branch_leaf);if(n)run(()=>selectNode(n.id));});$('last')?.addEventListener('click',()=>{const n=lineThrough(doc,doc.selected,doc.branch_leaf).at(-1);if(n)run(()=>selectNode(n.id));});$('pass')?.addEventListener('click',()=>run(()=>place(81)));
-$('timeline')?.addEventListener('click',e=>{const t=e.target?.closest?.('[data-node]');if(t)run(()=>selectNode(t.dataset.node));});$('timeline')?.addEventListener('keydown',e=>{if(['Enter',' '].includes(e.key)){const t=e.target?.closest?.('[data-node]');if(t){e.preventDefault();run(()=>selectNode(t.dataset.node));}}});
+$('timeline')?.addEventListener('click',e=>{const rt=e.target?.closest?.('[data-reading-node]');if(rt){run(()=>selectReadingNode(rt.dataset.readingNode));return;}const t=e.target?.closest?.('[data-node]');if(t)run(()=>selectNode(t.dataset.node));});$('timeline')?.addEventListener('keydown',e=>{if(['Enter',' '].includes(e.key)){const rt=e.target?.closest?.('[data-reading-node]');if(rt){e.preventDefault();run(()=>selectReadingNode(rt.dataset.readingNode));return;}const t=e.target?.closest?.('[data-node]');if(t){e.preventDefault();run(()=>selectNode(t.dataset.node));}}});
 for(const [id,value]of [['graph-win','win'],['graph-score','score']])$(id)?.addEventListener('click',()=>{graphMode=value;$('graph-win')?.classList.toggle('active',value==='win');$('graph-score')?.classList.toggle('active',value==='score');renderTimeline();});
 $('pv-import')?.addEventListener('click',()=>run(importPV));$('preview-exit')?.addEventListener('click',()=>{preview=null;renderBoard();});
-$('notes')?.addEventListener('input',()=>{const had=Boolean((active().notes||'').trim());active().notes=$('notes').value;save();if(had!==Boolean(active().notes.trim()))renderTimeline();else renderMemos();});$('title')?.addEventListener('input',()=>{doc.title=$('title').value;save();});
+$('notes')?.addEventListener('input',()=>{if(isReading())return;const had=Boolean((active().notes||'').trim());active().notes=$('notes').value;save();if(had!==Boolean(active().notes.trim()))renderTimeline();else renderMemos();});$('title')?.addEventListener('input',()=>{doc.title=$('title').value;save();});
 $('new-button')?.addEventListener('click',()=>run(showNew));$('new-close')?.addEventListener('click',()=>$('new-dialog')?.close());$('neutral-setup')?.addEventListener('change',()=>{$('neutral-coordinates').hidden=$('neutral-setup').value!=='custom';});
 $('new-form')?.addEventListener('submit',e=>{e.preventDefault();run(()=>createGame({neutral:$('neutral-setup').value==='none'?null:$('neutral-setup').value==='center'?[4,4]:[Number($('neutral-row').value)-1,Number($('neutral-col').value)-1],komi:Number($('komi').value)}));});
 $('export-button')?.addEventListener('click',()=>{if(!doc)return;saveNow();const url=URL.createObjectURL(new Blob([JSON.stringify(studyForSave(doc),null,2)],{type:'application/json'})),a=document.createElement('a');a.href=url;a.download=`${doc.title.replace(/[^\p{L}\p{N} _-]/gu,'').slice(0,60)||'great-kingdom'}.json`;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);});
 $('import-button')?.addEventListener('click',()=>$('import-file')?.click());$('import-file')?.addEventListener('change',e=>run(async()=>{const f=e.target.files[0];if(!f)return;if(f.size>2*1024*1024)throw Error('최대 2MB 기보를 지원합니다.');await loadStudy(JSON.parse(await f.text()));e.target.value='';}));
-window.addEventListener('pagehide',()=>{saveNow();cancel();});document.addEventListener('keydown',e=>{if(['INPUT','TEXTAREA','SELECT'].includes(document.activeElement.tagName)||document.querySelector('dialog[open]'))return;if(e.key==='ArrowLeft'){$('previous')?.click();e.preventDefault();}if(e.key==='ArrowRight'){$('next')?.click();e.preventDefault();}});
+window.addEventListener('pagehide',()=>{saveNow();cancel();});document.addEventListener('keydown',e=>{if(['INPUT','TEXTAREA','SELECT'].includes(document.activeElement.tagName)||document.querySelector('dialog[open]'))return;if(e.key==='ArrowLeft'){if(isReading())readingPrev();else $('previous')?.click();e.preventDefault();}if(e.key==='ArrowRight'){if(isReading())readingNext();else $('next')?.click();e.preventDefault();}});
 
 run(async()=>{
  loadSettings();
+ applyTheme();
  config=staticOnly?await loadStaticConfig():await api('config');
  populateModels();
  if($('backend')){

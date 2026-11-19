@@ -1,37 +1,66 @@
 import {lineThrough,blueEvaluation,resolveBranchLeaf,branchLeaves} from './study.mjs';
+export function mergeReadingTree(doc,reading){
+ if(!reading||!reading.doc||!Array.isArray(reading.doc.nodes)||reading.doc.nodes.length<=1){
+  return {doc,readingActive:Boolean(reading)};
+ }
+ const rRoot=reading.doc.nodes[0].id;
+ const realNodes=doc.nodes.map(n=>({...n,isReading:false}));
+ const readingNodes=reading.doc.nodes.filter(rn=>rn.parent!==null).map(rn=>({
+  ...rn,
+  id:`reading:${rn.id}`,
+  parent:rn.parent===rRoot?reading.anchorId:`reading:${rn.parent}`,
+  isReading:true,
+  readingId:rn.id,
+ }));
+ const selected=reading.doc.selected===rRoot?reading.anchorId:`reading:${reading.doc.selected}`;
+ const branch_leaf=reading.doc.branch_leaf===rRoot?reading.anchorId:`reading:${reading.doc.branch_leaf}`;
+ return {doc:{...doc,selected,branch_leaf,nodes:[...realNodes,...readingNodes]},readingActive:true};
+}
 export function treeLayout(doc){
  const children=new Map(doc.nodes.map(n=>[n.id,[]]));for(const n of doc.nodes)if(n.parent!==null)children.get(n.parent).push(n);
  const placed=new Map();let row=0;
  function visit(n){const cs=children.get(n.id);let y;if(!cs.length)y=row++*47;else{const ys=cs.map(visit);y=ys[0];}placed.set(n.id,{...n,x:54+n.ply*70,y});return y;}
  visit(doc.nodes[0]);const nodes=doc.nodes.map(n=>placed.get(n.id));return {nodes,edges:nodes.filter(n=>n.parent!==null).map(n=>({parent:n.parent,child:n.id,from:placed.get(n.parent),to:n})),width:Math.max(800,130+Math.max(...nodes.map(n=>n.ply))*70),height:Math.max(65,row*47+20)};
 }
-export function timelineSvg(doc,analysisFor,mode='win',branchLeaf=doc?.branch_leaf){
- const activeLeaf=resolveBranchLeaf(doc,doc.selected,branchLeaf);
- const leaves=new Set(branchLeaves(doc).map(n=>n.id));
- const l=treeLayout(doc),line=lineThrough(doc,doc.selected,activeLeaf),selected=new Set(line.map(n=>n.id)),x=p=>54+p*70;
- const points=line.map(n=>({n,v:blueEvaluation(analysisFor(n),doc.setup.komi)})),score=mode==='score';
+export function timelineSvg(doc,analysisFor,mode='win',branchLeaf=doc?.branch_leaf,reading=null){
+ const merged=mergeReadingTree(doc,reading);
+ const viewDoc=merged.doc;
+ const effectiveBranchLeaf=reading?viewDoc.branch_leaf:branchLeaf;
+ const activeLeaf=resolveBranchLeaf(viewDoc,viewDoc.selected,effectiveBranchLeaf);
+ const leaves=new Set(branchLeaves(viewDoc).map(n=>n.id));
+ const l=treeLayout(viewDoc),line=lineThrough(viewDoc,viewDoc.selected,activeLeaf),selected=new Set(line.map(n=>n.id)),x=p=>54+p*70;
+ const points=line.map(n=>({n,v:blueEvaluation(n.isReading?(n.analysis||null):analysisFor(n),viewDoc.setup.komi)})),score=mode==='score';
  const max=Math.max(10,...points.map(p=>Math.abs(p.v.margin??0))),value=p=>score?p.v.margin:p.v.win,y=v=>score?80-v/max*52:132-v*104;
- let svg=`<svg width="${l.width}" height="${l.height+205}" viewBox="0 0 ${l.width} ${l.height+205}" role="group" aria-label="선택 가지 평가와 수순 분기 트리"><line x1="34" x2="${l.width-20}" y1="80" y2="80" stroke="#d7dee6" stroke-dasharray="4 4"/><text x="12" y="32" class="axis-label" fill="#4173e6" font-weight="750">${score?`+${max.toFixed(0)}집`:'파랑'}</text><text x="12" y="84" class="axis-label" fill="#7a8795" font-weight="600">균형</text><text x="12" y="136" class="axis-label" fill="#ee6338" font-weight="750">${score?`-${max.toFixed(0)}집`:'빨강'}</text>`;
+ let svg=`<svg class="timeline-svg" width="${l.width}" height="${l.height+205}" viewBox="0 0 ${l.width} ${l.height+205}" role="group" aria-label="선택 가지 평가와 수순 분기 트리"><line class="timeline-grid" x1="34" x2="${l.width-20}" y1="80" y2="80" stroke="#d7dee6" stroke-dasharray="4 4"/><text x="12" y="32" class="axis-label" fill="#4173e6" font-weight="750">${score?`+${max.toFixed(0)}집`:'파랑'}</text><text x="12" y="84" class="axis-label" fill="#7a8795" font-weight="600">균형</text><text x="12" y="136" class="axis-label" fill="#ee6338" font-weight="750">${score?`-${max.toFixed(0)}집`:'빨강'}</text>`;
  let prev=null;for(const p of points){
   const v=value(p);
   if(v!==null){
    const currY=y(v);
-   const currColor=currY<79?'#4173e6':currY>81?'#ee6338':'#8a9ba8';
+   const currColor=p.n.isReading?'#8b5cf6':(currY<79?'#4173e6':currY>81?'#ee6338':'#8a9ba8');
    if(prev){
     const prevY=y(value(prev));
-    const lineColor=(currY<80&&prevY<80)?'#4173e6':(currY>80&&prevY>80)?'#ee6338':'#b0bec5';
-    svg+=`<line x1="${x(prev.n.ply)}" y1="${prevY}" x2="${x(p.n.ply)}" y2="${currY}" stroke="${lineColor}" stroke-width="2.5"/>`;
+    const lineColor=(p.n.isReading||prev.n.isReading)?'#8b5cf6':((currY<80&&prevY<80)?'#4173e6':(currY>80&&prevY>80)?'#ee6338':'#b0bec5');
+    svg+=`<line x1="${x(prev.n.ply)}" y1="${prevY}" x2="${x(p.n.ply)}" y2="${currY}" stroke="${lineColor}" stroke-width="2.5"${(p.n.isReading||prev.n.isReading)?' stroke-dasharray="4 3"':''}/>`;
    }
    svg+=`<circle cx="${x(p.n.ply)}" cy="${currY}" r="4" fill="${currColor}" stroke="#ffffff" stroke-width="1.5"/>`;
    prev=p;
   }else prev=null;
-  svg+=`<g data-node="${p.n.id}" tabindex="0" role="button" aria-label="${p.n.ply}수로 이동"><rect x="${x(p.n.ply)-25}" y="20" width="50" height="130" fill="transparent"/><text x="${x(p.n.ply)}" y="164" text-anchor="middle" class="axis-label">${p.n.ply}수</text></g>`;
+  const navAttr=p.n.isReading?`data-reading-node="${p.n.readingId}"`:`data-node="${p.n.id}"`;
+  svg+=`<g ${navAttr} tabindex="0" role="button" aria-label="${p.n.ply}수로 이동"><rect x="${x(p.n.ply)-25}" y="20" width="50" height="130" fill="transparent"/><text x="${x(p.n.ply)}" y="164" text-anchor="middle" class="axis-label">${p.n.ply}수</text></g>`;
  }
- svg+=`<line x1="${x(doc.nodes.find(n=>n.id===doc.selected).ply)}" x2="${x(doc.nodes.find(n=>n.id===doc.selected).ply)}" y1="15" y2="175" stroke="#365969" stroke-opacity=".25"/>`;
+ const selectedNode=viewDoc.nodes.find(n=>n.id===viewDoc.selected);
+ if(selectedNode)svg+=`<line class="timeline-cursor" x1="${x(selectedNode.ply)}" x2="${x(selectedNode.ply)}" y1="15" y2="175" stroke="#365969" stroke-opacity=".25"/>`;
  if(!points.some(p=>value(p)!==null))svg+='<text x="340" y="60" text-anchor="middle" class="axis-label">미분석 구간 · 아래 한번에 다시 분석에서 계산할 수 있어요</text>';
- for(const e of l.edges){const a=e.from,b=e.to,onLine=selected.has(a.id)&&selected.has(b.id);svg+=`<path d="M${a.x+23} ${a.y+211} C${a.x+36} ${a.y+211},${b.x-36} ${b.y+211},${b.x-23} ${b.y+211}" fill="none" stroke="${onLine?'#276a66':'#d8dfe6'}" stroke-width="${onLine?3.5:1.5}"/>`;}
+ for(const e of l.edges){
+  const a=e.from,b=e.to,onLine=selected.has(a.id)&&selected.has(b.id);
+  if(b.isReading){
+   svg+=`<path class="timeline-edge reading-edge${onLine?' on-line':''}" d="M${a.x+23} ${a.y+211} C${a.x+36} ${a.y+211},${b.x-36} ${b.y+211},${b.x-23} ${b.y+211}" fill="none" stroke="${onLine?'#7c3aed':'#c4b5fd'}" stroke-width="${onLine?3.5:2}" stroke-dasharray="5 3"/>`;
+  }else{
+   svg+=`<path class="timeline-edge${onLine?' on-line':''}" d="M${a.x+23} ${a.y+211} C${a.x+36} ${a.y+211},${b.x-36} ${b.y+211},${b.x-23} ${b.y+211}" fill="none" stroke="${onLine?'#276a66':'#d8dfe6'}" stroke-width="${onLine?3.5:1.5}"/>`;
+  }
+ }
  for(const n of l.nodes){
-  const parent=doc.nodes.find(p=>p.id===n.parent);
+  const parent=viewDoc.nodes.find(p=>p.id===n.parent);
   const blue=parent?.position?parent.position.side_to_move==='first':n.ply%2===1;
   const a=n.action;
   const coord = c => `${Math.floor(c/9)+1}·${c%9+1}`;
@@ -44,15 +73,24 @@ export function timelineSvg(doc,analysisFor,mode='win',branchLeaf=doc?.branch_le
   else if(a>=100){ label='파랑 '+coord(a-100); color='#4173e6'; }
   else { label=coord(a); color=blue?'#4173e6':'#ee6338'; }
 
-  const rw = Math.max(46, label.length * 8.5 + 10);
+  const sideColor=color;
+  if(n.isReading){
+   color='#7c3aed';
+  }
+  const rw = Math.max(n.isReading ? 54 : 46, label.length * 8.5 + (n.isReading ? 18 : 10));
   const rx = n.x - rw / 2;
   const hasNote = Boolean(n.notes && n.notes.trim().length > 0);
   const onLine = selected.has(n.id);
   const isBranchLeaf = n.id === activeLeaf;
   const isLeaf = leaves.has(n.id);
-  const strokeColor = n.id === doc.selected ? '#172e45' : (isBranchLeaf ? '#276a66' : 'none');
-  const strokeWidth = n.id === doc.selected ? 3 : (isBranchLeaf ? 2 : 0);
-  svg+=`<g data-node="${n.id}"${isLeaf?` data-leaf="${n.id}"`:''} tabindex="0" role="button" aria-label="${n.ply}수 ${label}${isBranchLeaf?' (현재 가지 끝)':''}" opacity="${onLine?1:0.72}"><rect x="${rx}" y="${n.y+195}" width="${rw}" height="32" rx="7" fill="${color}" stroke="${strokeColor}" stroke-width="${strokeWidth}"/><text x="${n.x}" y="${n.y+215}" text-anchor="middle" fill="${n.parent===null?'#526474':'white'}" font-size="${label.length > 4 ? 11 : 12}" font-weight="650">${label}</text>${hasNote ? `<circle cx="${rx+rw-4}" cy="${n.y+197}" r="4.5" fill="#f59e0b" stroke="#ffffff" stroke-width="1.5"/>` : ''}${isBranchLeaf && leaves.size > 1 ? `<circle cx="${rx+rw+8}" cy="${n.y+211}" r="4.5" fill="#276a66" stroke="#ffffff" stroke-width="1.5"><title>현재 선택된 가지 끝</title></circle>` : ''}</g>`;
+  const isSelected = n.id === viewDoc.selected;
+  const strokeColor = isSelected ? (n.isReading ? '#4c1d95' : '#172e45') : (isBranchLeaf ? (n.isReading ? '#8b5cf6' : '#276a66') : (n.isReading ? '#a78bfa' : 'none'));
+  const strokeWidth = isSelected ? 3 : (isBranchLeaf ? 2 : (n.isReading ? 1.5 : 0));
+  const nodeAttr = n.isReading ? `data-reading-node="${n.readingId}"` : `data-node="${n.id}"`;
+  const nodeClass = n.isReading ? 'reading-node' : (n.parent === null ? 'start-node' : '');
+  const sideDot = n.isReading ? `<circle cx="${rx+9}" cy="${n.y+211}" r="3.5" fill="${sideColor}" stroke="#ffffff" stroke-width="1"/>` : '';
+  const textX = n.isReading ? n.x + 4 : n.x;
+  svg+=`<g ${nodeAttr}${nodeClass?` class="${nodeClass}"`:''}${isLeaf?` data-leaf="${n.id}"`:''} tabindex="0" role="button" aria-label="${n.isReading?'수읽기 ':''}${n.ply}수 ${label}${isBranchLeaf?' (현재 가지 끝)':''}" opacity="${onLine?1:0.72}"><rect x="${rx}" y="${n.y+195}" width="${rw}" height="32" rx="7" fill="${color}" stroke="${strokeColor}" stroke-width="${strokeWidth}"${n.isReading&&!isSelected?' stroke-dasharray="4 2"':''}/>${sideDot}<text x="${textX}" y="${n.y+215}" text-anchor="middle" fill="${n.parent===null?'#526474':'white'}" font-size="${label.length > 4 ? 11 : 12}" font-weight="650">${label}</text>${hasNote ? `<circle cx="${rx+rw-4}" cy="${n.y+197}" r="4.5" fill="#f59e0b" stroke="#ffffff" stroke-width="1.5"/>` : ''}${isBranchLeaf && leaves.size > 1 ? `<circle cx="${rx+rw+8}" cy="${n.y+211}" r="4.5" fill="${n.isReading?'#7c3aed':'#276a66'}" stroke="#ffffff" stroke-width="1.5"><title>현재 선택된 가지 끝</title></circle>` : ''}</g>`;
  }
  return svg+'</svg>';
 }

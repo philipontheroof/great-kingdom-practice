@@ -1,6 +1,6 @@
 <!doctype html>
 <html data-execution="local" lang="ko">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#172e45"><title>Great Kingdom · 연습실</title><link rel="icon" href="data:,"><link rel="stylesheet" href="./style.css?v=17"><script type="module" src="./app.mjs?v=17"></script></head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#172e45"><title>Great Kingdom · 연습실</title><link rel="icon" href="data:,"><link rel="stylesheet" href="./style.css?v=18"><script type="module" src="./app.mjs?v=18"></script></head>
 <body>
   <main>
     <header class="study-toolbar">
@@ -10,6 +10,11 @@
         <span id="save-state" class="saved">기기에 저장</span>
       </div>
       <div class="toolbar-actions">
+        <div class="theme-switch" role="group" aria-label="화면 테마">
+          <button type="button" id="theme-system" data-theme-mode="system" class="theme-btn active" aria-pressed="true" title="시스템 설정 따름">자동</button>
+          <button type="button" id="theme-light" data-theme-mode="light" class="theme-btn" aria-pressed="false" title="라이트 모드">☀️</button>
+          <button type="button" id="theme-dark" data-theme-mode="dark" class="theme-btn" aria-pressed="false" title="다크 모드">🌙</button>
+        </div>
         <button id="import-button" class="quiet-button">불러오기</button>
         <button id="export-button" class="quiet-button">내보내기</button>
         <button id="new-button" class="primary-button"><span>＋</span> 새 대국</button>
@@ -59,6 +64,21 @@
                 <button type="button" id="turn-order-blue" class="pill-btn pill-blue active" title="파란 성 차례입니다"><span class="dot-icon blue"></span> 🔵 파랑</button>
                 <button type="button" id="turn-order-red" class="pill-btn pill-red" title="빨간 성 차례입니다"><span class="dot-icon red"></span> 🔴 빨강</button>
               </div>
+            </div>
+            <div class="bar-divider"></div>
+            <button type="button" id="reading-toggle" class="pill-btn pill-reading" aria-pressed="false" title="기보에 남기지 않고 임시 돌을 놓아 수읽기를 합니다">💭 수읽기 모드</button>
+          </div>
+
+          <div id="reading-bar" class="reading-bar" role="toolbar" aria-label="수읽기 모드 제어" hidden>
+            <div class="reading-bar-info">
+              <span class="reading-badge">💭 수읽기 중</span>
+              <span id="reading-status">임시 돌을 놓아볼 수 있어요</span>
+            </div>
+            <div class="reading-bar-actions">
+              <button type="button" id="reading-prev" class="reading-btn" title="수읽기 한 수 뒤로">← 한수 뒤로</button>
+              <button type="button" id="reading-next" class="reading-btn" title="수읽기 한 수 앞으로">→ 한수 앞으로</button>
+              <button type="button" id="reading-reset" class="reading-btn" title="수읽기 시작 국면으로 초기화">↺ 초기화</button>
+              <button type="button" id="reading-exit" class="reading-btn reading-exit-btn" title="수읽기를 마치고 원래 국면으로 돌아갑니다">↩ 원래로 돌아가기</button>
             </div>
           </div>
 
@@ -132,7 +152,10 @@
               </div>
               <div>
                 <small>실제 탐색량</small>
-                <strong id="visits-value">—</strong>
+                <div class="visits-value-row">
+                  <strong id="visits-value">—</strong>
+                  <span id="analysis-stop-reason" class="stop-reason-badge" hidden></span>
+                </div>
               </div>
             </div>
             <div id="raw-value" class="raw-value">모델 원평가와 탐색 결과를 구분해서 보여줘요.</div>
@@ -236,6 +259,7 @@
                 <span class="label">현재 분석 visit 수</span>
                 <span class="search-visits-right">
                   <strong id="search-visits-num">0 visits</strong>
+                  <span id="search-stop-reason" class="stop-reason-badge" hidden></span>
                   <span id="search-speed" class="search-speed">— visits/s</span>
                 </span>
               </div>
@@ -418,7 +442,9 @@
                   <input id="play-temperature" type="number" inputmode="decimal" min="0" max="2" step="0.1" aria-label="AI 착수 Temperature" value="0.4">
                 </div>
               </div>
-              <span class="hint">0이면 항상 최선수, 높을수록 다양한 수를 둡니다 (즉시 승패 수 제외).</span>
+              <span class="hint">0이면 항상 최선수, 높을수록 다양한 수를 둡니다.</span>
+              <label class="switch-row nested"><input id="play-force-proven-win" type="checkbox" role="switch" checked><span>필승수 발견 시 강제 선택</span></label>
+              <label class="switch-row nested"><input id="play-ignore-proven-loss" type="checkbox" role="switch" checked><span>Temp 적용 시 필패수 제외</span></label>
             </div>
             <div class="play-status">
               <span id="play-status" class="hint">AI 착수 꺼짐 · 양쪽을 직접 둡니다</span>

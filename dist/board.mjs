@@ -10,13 +10,29 @@ export function tileLayers(position,index,prediction=null) {
   return {castle,territory,predictedOwner,confidence};
 }
 
-export function boardSvg(position,{actions=[],lastAction=null,analysis=null,showTerritory=true,showOwnership=false,showCandidates=false,showPV=false,showNumbers=true}={}) {
-  const nums=new Map();
+export function candidateOutcome(candidate,analysis=null) {
+  if(!candidate)return null;
+  if(candidate.proven_winner&&analysis?.perspective)return candidate.proven_winner===analysis.perspective?'win':'loss';
+  if(analysis?.exact?.status==='immediate_win'&&candidate.visits>0)return 'win';
+  if(candidate.q===1)return 'win';
+  if(candidate.visits>0&&candidate.q===-1)return 'loss';
+  return null;
+}
+
+export function boardSvg(position,{actions=[],lastAction=null,analysis=null,showTerritory=true,showOwnership=false,showCandidates=false,showPV=false,showNumbers=true,readingMode=false,readingStartIndex=null}={}) {
+  const nums=new Map(),readingNums=new Map();
+  const splitIdx=readingMode&&Number.isInteger(readingStartIndex)?readingStartIndex:actions.length;
   actions.forEach((a,i)=>{
     if(a===null||a===81)return;
-    if(a>=400)nums.delete(a-400);
-    else if(a>=100)nums.set(a%100,i+1);
-    else nums.set(a,i+1);
+    const cell=a>=400?a-400:a>=100?a%100:a;
+    if(a>=400){nums.delete(cell);readingNums.delete(cell);return;}
+    if(readingMode&&i>=splitIdx){
+      nums.delete(cell);
+      readingNums.set(cell,i-splitIdx+1);
+    }else{
+      readingNums.delete(cell);
+      nums.set(cell,i+1);
+    }
   });
   const lastCell=(lastAction===null||lastAction===81)?null:(lastAction>=400?null:(lastAction>=100?(lastAction%100):lastAction));
   const allVisited=(analysis?.mcts?.candidates||[]).filter(c=>c.visits>0);
@@ -24,6 +40,14 @@ export function boardSvg(position,{actions=[],lastAction=null,analysis=null,show
   const passCandidate=showCandidates?allVisited.find(c=>c.action===81):null;
   const passIsBest=Boolean(passCandidate&&allVisited[0]?.action===81);
   const ranks=new Map(candidates.map((c,i)=>[c.action,{...c,rank:i+1,isBest:allVisited[0]?.action===c.action}]));
+  const extraProven=new Map();
+  if(showCandidates){
+    for(const c of allVisited){
+      if(c.action!==81&&!ranks.has(c.action)&&candidateOutcome(c,analysis)!==null){
+        extraProven.set(c.action,c);
+      }
+    }
+  }
   const pvMap=new Map();
   if(showPV&&analysis?.mcts?.principal_variation?.length){
     analysis.mcts.principal_variation.forEach((action,i)=>{
@@ -34,36 +58,53 @@ export function boardSvg(position,{actions=[],lastAction=null,analysis=null,show
     });
   }
   const legal=new Set(position.legal_actions||[]),marks=new Set(position.terminal_marks||[]);
-  let svg=`<svg class="kingdom-board" viewBox="0 0 602 602" role="group" aria-label="그레이트 킹덤 9×9 판">
+  let svg=`<svg class="kingdom-board${readingMode?' reading-board':''}" viewBox="0 0 602 602" role="group" aria-label="그레이트 킹덤 9×9 판">
     <defs>
       <linearGradient id="redStone" x2="1" y2="1"><stop stop-color="#f78154"/><stop offset=".55" stop-color="#ee6338"/><stop offset="1" stop-color="#d84a20"/></linearGradient>
       <linearGradient id="blueStone" x2="1" y2="1"><stop stop-color="#5b8df8"/><stop offset=".55" stop-color="#4173e6"/><stop offset="1" stop-color="#295bcc"/></linearGradient>
       <linearGradient id="neutralStone" x2="1" y2="1"><stop stop-color="#f0f2f5"/><stop offset=".55" stop-color="#d8dde5"/><stop offset="1" stop-color="#b8c0cc"/></linearGradient>
       <filter id="castleShadow" x="-30%" y="-30%" width="160%" height="160%"><feDropShadow dx="0" dy="2" stdDeviation="1.5" flood-opacity=".28"/></filter>
-    </defs><rect x="22" y="22" width="558" height="558" rx="15" fill="#fffdf9" stroke="#dce2eb"/>`;
+    </defs><rect class="board-bg" x="22" y="22" width="558" height="558" rx="15" fill="#fffdf9" stroke="#dce2eb"/>`;
   for(let i=0;i<9;i++) {
     const p=69+i*58;
     svg+=`<text class="board-axis" x="${p}" y="15">${i+1}</text><text class="board-axis" x="10" y="${p+4}">${i+1}</text>`;
   }
   for(let i=0;i<81;i++) {
     const x=69+(i%9)*58,y=69+Math.floor(i/9)*58;
-    const tile=tileLayers(position,i,showOwnership?analysis:null),rank=ranks.get(i);
+    const tile=tileLayers(position,i,showOwnership?analysis:null),rank=ranks.get(i),extra=extraProven.get(i);
     const territory=showTerritory?tile.territory:0;
     const fill=territory===1?'#98b7f7':territory===2?'#f4b497':'#f8fafc';
+    const tileClass=territory===1?'territory-blue':territory===2?'territory-red':'empty';
     svg+=`<g class="board-cell${legal.has(i)?' playable':''}" data-action="${i}" role="button" tabindex="${legal.has(i)?0:-1}" aria-disabled="${!legal.has(i)}" aria-label="${Math.floor(i/9)+1}행 ${i%9+1}열${tile.castle===1?' 파란 성':tile.castle===2?' 빨간 성':tile.castle===3?' 중립 성':''}">
-      <rect x="${x-27}" y="${y-27}" width="54" height="54" rx="6" fill="#e7ebf1"/>
-      <rect x="${x-24}" y="${y-24}" width="48" height="48" rx="4" fill="${fill}"/>`;
+      <rect class="board-cell-frame" x="${x-27}" y="${y-27}" width="54" height="54" rx="6" fill="#e7ebf1"/>
+      <rect class="board-cell-tile ${tileClass}" x="${x-24}" y="${y-24}" width="48" height="48" rx="4" fill="${fill}"/>`;
     if(tile.predictedOwner){const color=tile.predictedOwner===1?'#477def':tile.predictedOwner===2?'#ed764c':'#aab4c0';
       svg+=`<rect class="predicted-tile" x="${x-23}" y="${y-23}" width="46" height="46" rx="3" fill="${color}" fill-opacity="${tile.confidence.toFixed(3)}" stroke="${color}" stroke-dasharray="3 3"/><text class="ownership-number" x="${x}" y="${y+(showCandidates&&rank?18:4)}" fill="#18334b">${Math.round(tile.confidence*100)}%</text><title>${tile.predictedOwner===1?'파랑':tile.predictedOwner===2?'빨강':'미소유'} 예상 ${Math.round(tile.confidence*100)}%</title>`;
     }
     if(tile.castle) {
-      svg+=`<rect x="${x-24}" y="${y-24}" width="48" height="48" rx="4" fill="url(#${tile.castle===1?'blue':tile.castle===2?'red':'neutral'}Stone)" filter="url(#castleShadow)" opacity="${marks.has(i)?.58:1}"/>
+      const isReadingStone=readingMode&&readingNums.has(i);
+      const stoneClass=readingMode?(isReadingStone?'reading-stone':'anchor-stone'):'';
+      svg+=`<g${stoneClass?` class="${stoneClass}"`:''}><rect x="${x-24}" y="${y-24}" width="48" height="48" rx="4" fill="url(#${tile.castle===1?'blue':tile.castle===2?'red':'neutral'}Stone)" filter="url(#castleShadow)" opacity="${marks.has(i)?.58:1}"/>
       <circle cx="${x}" cy="${y}" r="14" fill="none" stroke="#172033" stroke-opacity=".18" stroke-width="1.5"/>`;
+      if(isReadingStone)svg+=`<rect class="reading-stone-ring" x="${x-24}" y="${y-24}" width="48" height="48" rx="4" fill="none" stroke="#c084fc" stroke-width="2" stroke-dasharray="5 3"/>`;
       if(marks.has(i))svg+=`<path data-terminal="${i}" d="M${x-20} ${y-20}l40 40m0-40l-40 40" stroke="#ff3b30" stroke-width="8" stroke-linecap="round"/>`;
-      if(showNumbers&&nums.has(i))svg+=`<text class="move-number" x="${x}" y="${y}" fill="${tile.castle===3?'#233042':'white'}">${nums.get(i)}</text>`;
-      if(lastCell===i)svg+=`<rect data-last="${i}" x="${x-27}" y="${y-27}" width="54" height="54" rx="6" fill="none" stroke="#172f48" stroke-width="2.5"/>`;
+      if(showNumbers&&isReadingStone)svg+=`<text class="move-number reading-move-number" x="${x}" y="${y}" fill="${tile.castle===3?'#233042':'#fef08a'}">${readingNums.get(i)}</text>`;
+      else if(showNumbers&&nums.has(i))svg+=`<text class="move-number" x="${x}" y="${y}" fill="${tile.castle===3?'#233042':'white'}">${nums.get(i)}</text>`;
+      svg+=`</g>`;
+      if(lastCell===i)svg+=`<rect class="last-move-ring" data-last="${i}" x="${x-27}" y="${y-27}" width="54" height="54" rx="6" fill="none" stroke="#172f48" stroke-width="2.5"/>`;
     } else if(showCandidates&&rank) {
-      svg+=`<circle cx="${x}" cy="${y-(tile.predictedOwner?5:0)}" r="20" class="candidate-dot ${rank.isBest?'best':''}"/><text class="candidate-number" x="${x}" y="${y-(tile.predictedOwner?5:0)}">${(rank.visit_share*100).toFixed(1)}%</text>`;
+      const outcome=candidateOutcome(rank,analysis);
+      const cy=y-(tile.predictedOwner?5:0);
+      svg+=`<circle cx="${x}" cy="${cy}" r="20" class="candidate-dot ${rank.isBest?'best':''}${outcome==='win'?' proven-win':outcome==='loss'?' proven-loss':''}"/>`;
+      if(outcome){
+        svg+=`<text class="candidate-number has-proven ${outcome}" x="${x}" y="${cy-4}">${(rank.visit_share*100).toFixed(1)}%</text><text class="candidate-proven ${outcome}" x="${x}" y="${cy+9}">${outcome==='win'?'필승':'필패'}</text>`;
+      }else{
+        svg+=`<text class="candidate-number" x="${x}" y="${cy}">${(rank.visit_share*100).toFixed(1)}%</text>`;
+      }
+    } else if(showCandidates&&extra) {
+      const outcome=candidateOutcome(extra,analysis);
+      const cy=y-(tile.predictedOwner?5:0);
+      svg+=`<circle cx="${x}" cy="${cy}" r="15" class="candidate-dot compact ${outcome==='win'?'proven-win':'proven-loss'}"/><text class="candidate-proven compact ${outcome}" x="${x}" y="${cy}">${outcome==='win'?'필승':'필패'}</text>`;
     }
     if(pvMap.has(i)) {
       const pv=pvMap.get(i);
@@ -78,8 +119,13 @@ export function boardSvg(position,{actions=[],lastAction=null,analysis=null,show
     svg+=`<g class="pass-badge" pointer-events="none" aria-label="${passedBlue?'파란':'빨간'} 성 패스"><rect x="233" y="575" width="136" height="24" rx="12" fill="${passedBlue?'#4173e6':'#ee6338'}" filter="url(#castleShadow)"/><text x="301" y="587" text-anchor="middle" dominant-baseline="central" fill="#ffffff" font-size="11.5" font-weight="750">${passedBlue?'파란':'빨간'} 성 패스</text></g>`;
   }
   if(passCandidate){
-    const label=`패스 ${(passCandidate.visit_share*100).toFixed(1)}%`;
-    svg+=`<g class="pass-candidate-badge" pointer-events="none" aria-label="패스 착수 비중 ${(passCandidate.visit_share*100).toFixed(1)}%"><rect x="452" y="575" width="128" height="24" rx="12" fill="${passIsBest?'#327967':'#e0ece8'}" stroke="${passIsBest?'#327967':'#b5cec4'}" stroke-width="1.5" filter="url(#castleShadow)"/><text x="516" y="587" text-anchor="middle" dominant-baseline="central" fill="${passIsBest?'#ffffff':'#2c5646'}" font-size="11" font-weight="750">${label}</text></g>`;
+    const passOutcome=candidateOutcome(passCandidate,analysis);
+    const label=`${passOutcome==='win'?'패스 필승':passOutcome==='loss'?'패스 필패':'패스'} ${(passCandidate.visit_share*100).toFixed(1)}%`;
+    const w=passOutcome?148:128,rx=580-w;
+    const fill=passOutcome==='win'?'#15803d':passOutcome==='loss'?'#fee2e2':passIsBest?'#327967':'#e0ece8';
+    const stroke=passOutcome==='win'?'#fbbf24':passOutcome==='loss'?'#ef4444':passIsBest?'#327967':'#b5cec4';
+    const textFill=passOutcome==='win'?'#ffffff':passOutcome==='loss'?'#b91c1c':passIsBest?'#ffffff':'#2c5646';
+    svg+=`<g class="pass-candidate-badge${passOutcome==='win'?' proven-win':passOutcome==='loss'?' proven-loss':''}" pointer-events="none" aria-label="패스 착수 비중 ${(passCandidate.visit_share*100).toFixed(1)}%${passOutcome==='win'?' 필승':passOutcome==='loss'?' 필패':''}"><rect x="${rx}" y="575" width="${w}" height="24" rx="12" fill="${fill}" stroke="${stroke}" stroke-width="1.5" filter="url(#castleShadow)"/><text x="${rx+w/2}" y="587" text-anchor="middle" dominant-baseline="central" fill="${textFill}" font-size="11" font-weight="750">${label}</text></g>`;
   }
   return svg+'</svg>';
 }

@@ -70,8 +70,9 @@ export function budgetPayload(budget){
 }
 
 export function budgetReached(budget,analysis){
- if(!analysis||!budget||budget.unit==='none')return false;
- if(analysis.source==='rule')return true;
+ if(!analysis)return false;
+ if(analysis.source==='rule'||['proven_win','proven_loss','fully_explored','terminal'].includes(analysis.stop_reason))return true;
+ if(!budget||budget.unit==='none')return false;
  if(budget.unit==='visits')return (analysis.mcts?.root_visits||0)>=budget.value;
  return (analysis.cumulative_elapsed_seconds??analysis.mcts?.elapsed_seconds??0)>=budget.value;
 }
@@ -91,15 +92,42 @@ export function normalizeTemperature(value,{fallback=TEMPERATURE_DEFAULT}={}){
  return Math.round(clamped*10)/10;
 }
 
-export function pickAiAction(result,temperature=0,rng=Math.random){
+export function isProvenWinCandidate(c,result){
+ if(!c)return false;
+ if(c.proven_winner&&result?.perspective)return c.proven_winner===result.perspective;
+ if(result?.exact?.status==='immediate_win')return true;
+ return c.q===1;
+}
+
+export function isProvenLossCandidate(c,result){
+ if(!c)return false;
+ if(c.proven_winner&&result?.perspective)return c.proven_winner!==result.perspective;
+ return c.visits>0&&c.q===-1;
+}
+
+export function pickAiAction(result,temperature=0,rng=Math.random,{ignoreProvenLoss=true,forceProvenWin=true}={}){
  const bestAction=result?.recommended_action??null;
  if(bestAction===null)return null;
  const temp=normalizeTemperature(temperature,{fallback:0});
- if(temp<=0||result?.source==='tactical'||result?.proven_winner)return bestAction;
- const visited=(result?.mcts?.candidates||[]).filter(c=>c&&c.visits>0);
+ const candidates=result?.mcts?.candidates||[];
+ const visited=candidates.filter(c=>c&&c.visits>0);
+ const winning=(visited.length?visited:candidates).filter(c=>isProvenWinCandidate(c,result));
+ if(forceProvenWin){
+   if(winning.length>0)return winning[0].action;
+   if(result?.source==='tactical'||(result?.proven_winner&&(!result?.perspective||result.proven_winner===result.perspective)))return bestAction;
+ }
+ if(temp<=0){
+   if(ignoreProvenLoss&&visited.length>1){
+     const bestCand=visited.find(c=>c.action===bestAction);
+     if(bestCand&&isProvenLossCandidate(bestCand,result)){
+       const nonLosing=visited.filter(c=>!isProvenLossCandidate(c,result));
+       if(nonLosing.length)return nonLosing[0].action;
+     }
+   }
+   return bestAction;
+ }
  if(visited.length<=1)return bestAction;
- if(visited.some(c=>c.q===1))return bestAction;
- const nonLosing=visited.filter(c=>c.q!==-1);
+ const nonLosing=ignoreProvenLoss?visited.filter(c=>!isProvenLossCandidate(c,result)):visited;
  const pool=nonLosing.length?nonLosing:visited;
  if(pool.length<=1)return pool[0].action;
  const maxVisits=Math.max(...pool.map(c=>c.visits));

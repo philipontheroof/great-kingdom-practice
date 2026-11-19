@@ -145,12 +145,15 @@ async function analyze(id,payload,options,runGeneration){
     const newVisits=search.rootVisits-initialVisits;
     return elapsedSec>0&&newVisits>0?newVisits/elapsedSec:0;
   };
+  const totalBudget=continuous?maxVisits:visits;
+  const earlyStop=totalBudget>=32;
   do{
     if(runGeneration!==generation)throw new DOMException('Analysis cancelled','AbortError');
     const remaining=maxVisits-search.rootVisits;
     const stepVisits=continuous?Math.max(0,Math.min(8,remaining)):Math.max(0,Math.min(8,visits-search.rootVisits));
-    snapshot=await search.advance(stepVisits,{deadline:continuous?continuousDeadline:deadline,stopped:()=>runGeneration!==generation});
-    const done=!continuous?(snapshot.mcts.root_visits>=visits||performance.now()>=deadline):(snapshot.mcts.root_visits>=maxVisits||performance.now()>=continuousDeadline);
+    snapshot=await search.advance(stepVisits,{deadline:continuous?continuousDeadline:deadline,stopped:()=>runGeneration!==generation,earlyStop});
+    const earlyDone=earlyStop&&search.shouldStopEarly();
+    const done=earlyDone||(!continuous?(snapshot.mcts.root_visits>=visits||performance.now()>=deadline):(snapshot.mcts.root_visits>=maxVisits||performance.now()>=continuousDeadline));
     const vps=currentVps();
     const result={...snapshot,...base(),stats:runtimeStats(vps),raw_network:{policy:raw.policy82,win_probability:raw.win_probability,expected_score:raw.expected_score,score_min:raw.score_min,score_distribution:raw.score_distribution,territory_probabilities:raw.territory_probabilities},done,cumulative_elapsed_seconds:(performance.now()-streamStartedAt)/1000};
     const now=performance.now();
