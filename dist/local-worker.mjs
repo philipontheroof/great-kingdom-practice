@@ -113,16 +113,18 @@ async function analyze(id,payload,options,runGeneration){
   if(!Number.isInteger(visits)||visits<1||visits>1600||!Number.isFinite(seconds)||seconds<.05||seconds>10)throw Error('Analysis budget is outside the supported range');
   const continuous=payload.continuous??options.continuous??false;
   if(typeof continuous!=='boolean')throw Error('continuous must be a boolean');
+  const searchMode=payload.search_mode??'puct';
+  if(searchMode!=='puct'&&searchMode!=='gumbel')throw Error('search_mode must be "puct" or "gumbel"');
   let maxVisits=visits,maxSeconds=null;
   if(continuous){maxVisits=payload.max_visits??10_000_000;if(!Number.isInteger(maxVisits)||maxVisits<1||maxVisits>10_000_000)throw Error('Continuous visit limit must be 1–10,000,000 visits');
     // Optional wall-clock cap for continuous analysis and timed AI moves.
     if(payload.max_seconds!==undefined&&payload.max_seconds!==null){maxSeconds=payload.max_seconds;if(typeof maxSeconds!=='number'||!Number.isFinite(maxSeconds)||maxSeconds<.05||maxSeconds>3600)throw Error('Continuous time limit must be 0.05–3600 seconds');}}
   else if(Object.hasOwn(payload,'max_visits')||Object.hasOwn(payload,'max_seconds'))throw Error('max_visits/max_seconds are only valid for continuous analysis');
-  const base=()=>({api_version:1,state_id:pos.state_id,position:pos,perspective:state.side_to_move,score_kind:'raw_territory_difference',budget:{visits,seconds},model:{id:manifest.model_id,sha256:manifest.sha256,label:manifest.source_model_label,feature_schema:manifest.feature_schema,ruleset_version:manifest.ruleset_version,score_min:manifest.score_min},execution:'browser',backend});
+  const base=()=>({api_version:1,state_id:pos.state_id,position:pos,perspective:state.side_to_move,score_kind:'raw_territory_difference',search_mode:searchMode,budget:{visits,seconds},model:{id:manifest.model_id,sha256:manifest.sha256,label:manifest.source_model_label,feature_schema:manifest.feature_schema,ruleset_version:manifest.ruleset_version,score_min:manifest.score_min},execution:'browser',backend});
   if(state.result)return {...base(),source:'rule',raw_network:null,exact:{source:'rule',proven_winner:state.result.winner,status:'terminal',threats:[]},proven_winner:state.result.winner,recommended_action:null,mcts:{root_visits:0,root_win_probability:state.result.winner===state.side_to_move?1:0,candidates:[],principal_variation:[],elapsed_seconds:0},done:true,cumulative_elapsed_seconds:(performance.now()-streamStartedAt)/1000};
   // Keep the four raw heads available even when tactics bypass neural expansion.
   // BrowserSearch consumes this cached result for its root expansion.
-  const targetCanonical=canonicalState(state),treeKey=`${manifest.model_id}:${pos.state_id}`;
+  const targetCanonical=canonicalState(state),treeKey=`${manifest.model_id}:${searchMode}:${pos.state_id}`;
   let cached=lruGet(treeCache,treeKey),raw,search;
   if(cached){
     raw=cached.raw;search=cached.search;search.started=performance.now();
@@ -134,7 +136,7 @@ async function analyze(id,payload,options,runGeneration){
       if(sub){promoted=sub;break;}
     }
     raw=await cachedInfer(state);
-    search=promoted?BrowserSearch.fromNode(promoted,s=>cachedInfer(s)):new BrowserSearch(state,s=>s===state?raw:cachedInfer(s));
+    search=promoted?BrowserSearch.fromNode(promoted,s=>cachedInfer(s),{searchMode}):new BrowserSearch(state,s=>s===state?raw:cachedInfer(s),{searchMode});
     lruSet(treeCache,treeKey,{search,raw},MAX_TREE_CACHE);
   }
   const initialVisits=search.rootVisits;
@@ -146,12 +148,13 @@ async function analyze(id,payload,options,runGeneration){
     return elapsedSec>0&&newVisits>0?newVisits/elapsedSec:0;
   };
   const totalBudget=continuous?maxVisits:visits;
+  const gumbelBudget=(!continuous||payload.max_visits!==undefined)?totalBudget:null;
   const earlyStop=totalBudget>=32;
   do{
     if(runGeneration!==generation)throw new DOMException('Analysis cancelled','AbortError');
     const remaining=maxVisits-search.rootVisits;
     const stepVisits=continuous?Math.max(0,Math.min(8,remaining)):Math.max(0,Math.min(8,visits-search.rootVisits));
-    snapshot=await search.advance(stepVisits,{deadline:continuous?continuousDeadline:deadline,stopped:()=>runGeneration!==generation,earlyStop});
+    snapshot=await search.advance(stepVisits,{deadline:continuous?continuousDeadline:deadline,stopped:()=>runGeneration!==generation,earlyStop,gumbelBudget});
     const earlyDone=earlyStop&&search.shouldStopEarly();
     const done=earlyDone||(!continuous?(snapshot.mcts.root_visits>=visits||performance.now()>=deadline):(snapshot.mcts.root_visits>=maxVisits||performance.now()>=continuousDeadline));
     const vps=currentVps();

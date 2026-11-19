@@ -19,6 +19,21 @@ export function candidateOutcome(candidate,analysis=null) {
   return null;
 }
 
+export function candidateShare(candidate,analysis=null) {
+  if(!candidate)return 0;
+  if(analysis?.search_mode==='gumbel'&&typeof candidate.improved_policy==='number'&&Number.isFinite(candidate.improved_policy)){
+    return candidate.improved_policy;
+  }
+  return typeof candidate.visit_share==='number'&&Number.isFinite(candidate.visit_share)?candidate.visit_share:0;
+}
+
+export function candidateRadius(share,maxShare,{hasProven=false,hasOwnership=false}={}){
+  const ratio=maxShare>0?Math.max(0,Math.min(1,share/maxShare)):0;
+  const minR=hasProven?15:11;
+  const maxR=hasOwnership?21:23;
+  return Number((minR+(maxR-minR)*Math.sqrt(ratio)).toFixed(1));
+}
+
 export function boardSvg(position,{actions=[],lastAction=null,analysis=null,showTerritory=true,showOwnership=false,showCandidates=false,showPV=false,showNumbers=true,readingMode=false,readingStartIndex=null}={}) {
   const nums=new Map(),readingNums=new Map();
   const splitIdx=readingMode&&Number.isInteger(readingStartIndex)?readingStartIndex:actions.length;
@@ -35,8 +50,10 @@ export function boardSvg(position,{actions=[],lastAction=null,analysis=null,show
     }
   });
   const lastCell=(lastAction===null||lastAction===81)?null:(lastAction>=400?null:(lastAction>=100?(lastAction%100):lastAction));
-  const allVisited=(analysis?.mcts?.candidates||[]).filter(c=>c.visits>0);
+  const isGumbel=analysis?.search_mode==='gumbel';
+  const allVisited=(analysis?.mcts?.candidates||[]).filter(c=>c.visits>0||(isGumbel&&(c.improved_policy??0)>=0.01));
   const candidates=allVisited.filter(c=>c.action!==81).slice(0,8);
+  const maxShare=candidates.reduce((mx,c)=>Math.max(mx,candidateShare(c,analysis)),0)||1;
   const passCandidate=showCandidates?allVisited.find(c=>c.action===81):null;
   const passIsBest=Boolean(passCandidate&&allVisited[0]?.action===81);
   const ranks=new Map(candidates.map((c,i)=>[c.action,{...c,rank:i+1,isBest:allVisited[0]?.action===c.action}]));
@@ -94,12 +111,17 @@ export function boardSvg(position,{actions=[],lastAction=null,analysis=null,show
       if(lastCell===i)svg+=`<rect class="last-move-ring" data-last="${i}" x="${x-27}" y="${y-27}" width="54" height="54" rx="6" fill="none" stroke="#172f48" stroke-width="2.5"/>`;
     } else if(showCandidates&&rank) {
       const outcome=candidateOutcome(rank,analysis);
+      const share=candidateShare(rank,analysis);
+      const r=candidateRadius(share,maxShare,{hasProven:Boolean(outcome),hasOwnership:Boolean(tile.predictedOwner)});
       const cy=y-(tile.predictedOwner?5:0);
-      svg+=`<circle cx="${x}" cy="${cy}" r="20" class="candidate-dot ${rank.isBest?'best':''}${outcome==='win'?' proven-win':outcome==='loss'?' proven-loss':''}"/>`;
+      const gStatus=isGumbel?(rank.gumbel_status||(rank.isBest?'selected':'active')):null;
+      const gClass=isGumbel?` gumbel${gStatus==='eliminated'?' gumbel-eliminated':gStatus==='finalist'?' gumbel-finalist':gStatus==='unconsidered'?' gumbel-unconsidered':''}`:'';
+      const numSize=outcome?(r<17?'8.5':'9'):(r<13.5?'8.5':(r>=20?'10.5':'10'));
+      svg+=`<circle cx="${x}" cy="${cy}" r="${r}" class="candidate-dot${gClass} ${rank.isBest?'best':''}${outcome==='win'?' proven-win':outcome==='loss'?' proven-loss':''}"/>`;
       if(outcome){
-        svg+=`<text class="candidate-number has-proven ${outcome}" x="${x}" y="${cy-4}">${(rank.visit_share*100).toFixed(1)}%</text><text class="candidate-proven ${outcome}" x="${x}" y="${cy+9}">${outcome==='win'?'필승':'필패'}</text>`;
+        svg+=`<text class="candidate-number${isGumbel?' gumbel':''} has-proven ${outcome}" style="font-size:${numSize}px" x="${x}" y="${cy-4}">${(share*100).toFixed(1)}%</text><text class="candidate-proven ${outcome}" x="${x}" y="${cy+9}">${outcome==='win'?'필승':'필패'}</text>`;
       }else{
-        svg+=`<text class="candidate-number" x="${x}" y="${cy}">${(rank.visit_share*100).toFixed(1)}%</text>`;
+        svg+=`<text class="candidate-number${isGumbel?' gumbel':''}" style="font-size:${numSize}px" x="${x}" y="${cy}">${(share*100).toFixed(1)}%</text>`;
       }
     } else if(showCandidates&&extra) {
       const outcome=candidateOutcome(extra,analysis);
@@ -120,12 +142,13 @@ export function boardSvg(position,{actions=[],lastAction=null,analysis=null,show
   }
   if(passCandidate){
     const passOutcome=candidateOutcome(passCandidate,analysis);
-    const label=`${passOutcome==='win'?'패스 필승':passOutcome==='loss'?'패스 필패':'패스'} ${(passCandidate.visit_share*100).toFixed(1)}%`;
+    const passShare=candidateShare(passCandidate,analysis);
+    const label=`${passOutcome==='win'?'패스 필승':passOutcome==='loss'?'패스 필패':'패스'} ${(passShare*100).toFixed(1)}%`;
     const w=passOutcome?148:128,rx=580-w;
-    const fill=passOutcome==='win'?'#15803d':passOutcome==='loss'?'#fee2e2':passIsBest?'#327967':'#e0ece8';
-    const stroke=passOutcome==='win'?'#fbbf24':passOutcome==='loss'?'#ef4444':passIsBest?'#327967':'#b5cec4';
-    const textFill=passOutcome==='win'?'#ffffff':passOutcome==='loss'?'#b91c1c':passIsBest?'#ffffff':'#2c5646';
-    svg+=`<g class="pass-candidate-badge${passOutcome==='win'?' proven-win':passOutcome==='loss'?' proven-loss':''}" pointer-events="none" aria-label="패스 착수 비중 ${(passCandidate.visit_share*100).toFixed(1)}%${passOutcome==='win'?' 필승':passOutcome==='loss'?' 필패':''}"><rect x="${rx}" y="575" width="${w}" height="24" rx="12" fill="${fill}" stroke="${stroke}" stroke-width="1.5" filter="url(#castleShadow)"/><text x="${rx+w/2}" y="587" text-anchor="middle" dominant-baseline="central" fill="${textFill}" font-size="11" font-weight="750">${label}</text></g>`;
+    const fill=passOutcome==='win'?'#15803d':passOutcome==='loss'?'#fee2e2':passIsBest?(isGumbel?'#4f46e5':'#327967'):(isGumbel?'#eef2ff':'#e0ece8');
+    const stroke=passOutcome==='win'?'#fbbf24':passOutcome==='loss'?'#ef4444':passIsBest?(isGumbel?'#4338ca':'#327967'):(isGumbel?'#a5b4fc':'#b5cec4');
+    const textFill=passOutcome==='win'?'#ffffff':passOutcome==='loss'?'#b91c1c':passIsBest?'#ffffff':(isGumbel?'#3730a3':'#2c5646');
+    svg+=`<g class="pass-candidate-badge${passOutcome==='win'?' proven-win':passOutcome==='loss'?' proven-loss':''}" pointer-events="none" aria-label="패스 착수 비중 ${(passShare*100).toFixed(1)}%${passOutcome==='win'?' 필승':passOutcome==='loss'?' 필패':''}"><rect x="${rx}" y="575" width="${w}" height="24" rx="12" fill="${fill}" stroke="${stroke}" stroke-width="1.5" filter="url(#castleShadow)"/><text x="${rx+w/2}" y="587" text-anchor="middle" dominant-baseline="central" fill="${textFill}" font-size="11" font-weight="750">${label}</text></g>`;
   }
   return svg+'</svg>';
 }

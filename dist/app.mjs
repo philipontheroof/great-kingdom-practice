@@ -1,6 +1,6 @@
 import {newStudy,addNode,pathTo,lineThrough,importDocument,blueEvaluation,studyForSave,resolveBranchLeaf,nextInBranch,branchLeaves,FORMAT} from './study.mjs';
 import {facts,stateGroups,territory,canonicalState,positionPayload} from './engine.mjs';
-import {boardSvg,candidateOutcome} from './board.mjs';
+import {boardSvg,candidateOutcome,candidateShare} from './board.mjs';
 import {STORE,persistStudy,retryAnalysis} from './client.mjs';
 import {PracticeControls,missingNodes,normalizeBudget,analysisFloor,budgetPayload,budgetReached,budgetLabel,BUDGET_RANGE,BUDGET_DEFAULT,TEMPERATURE_DEFAULT,normalizeTemperature,pickAiAction} from './controls.mjs';
 import {timelineSvg} from './timeline.mjs';
@@ -17,6 +17,7 @@ const STOP_REASON_LABELS={
 };
 const settings={
  theme:'system',
+ searchMode:'puct',
  analysisLimit:{unit:'seconds',value:2.0},
  analysisPinned:false,
  onceAutoShow:true,
@@ -115,6 +116,7 @@ function loadSettings(){
  let saved=null;try{saved=JSON.parse(localStorage.getItem(SETTINGS)||'null');}catch{saved=null;}
  if(!saved||typeof saved!=='object'||Array.isArray(saved))return;
  if(['system','light','dark'].includes(saved.theme))settings.theme=saved.theme;
+ if(['puct','gumbel'].includes(saved.searchMode))settings.searchMode=saved.searchMode;
  settings.analysisLimit=normalizeBudget(saved.analysisLimit,{allowNone:true,fallback:'seconds'});
  if(typeof saved.analysisPinned==='boolean')settings.analysisPinned=saved.analysisPinned;
  if(typeof saved.onceAutoShow==='boolean')settings.onceAutoShow=saved.onceAutoShow;
@@ -162,7 +164,7 @@ async function streamHost(payload,onUpdate,signal){
  }finally{await reader.cancel().catch(()=>{});}
 }
 async function search(node,budget,{onUpdate=()=>{},signal}={}){
- const payload={...positionRequest(node),model_id:doc.model_id,visits:1600,seconds:budget.unit==='seconds'?budget.value:2,continuous:true,...budgetPayload(budget)};
+ const payload={...positionRequest(node),model_id:doc.model_id,search_mode:settings.searchMode,visits:1600,seconds:budget.unit==='seconds'?budget.value:2,continuous:true,...budgetPayload(budget)};
  if(backend()==='host')delete payload.max_seconds;
  const inner=new AbortController(),relay=()=>inner.abort();signal?.addEventListener('abort',relay,{once:true});
  let last=null,reached=false;
@@ -346,7 +348,7 @@ async function startAnalysis({ai=false,kind=ai?'ai':'once'}={}){
  if(!valid())return;if(!ponder){acceptResult(result,node,model,execution);notice('');}
  }catch(error){if(error.name!=='AbortError'&&valid()&&!ponder)notice(error.message,true);return;}
  finally{analyzing=false;analysisKind=null;analysisController=null;if(valid()){if(!ponder)render();else renderSettings();}}
- const aiAction=ai?pickAiAction(result,settings.playTemperature,{ignoreProvenLoss:settings.ignoreProvenLoss,forceProvenWin:settings.forceProvenWin}):null;
+ const aiAction=ai?pickAiAction(result,settings.playTemperature,Math.random,{ignoreProvenLoss:settings.ignoreProvenLoss,forceProvenWin:settings.forceProvenWin}):null;
  if(ai&&valid()&&isLeafNode(doc,node.id)&&controls.aiTurn(node.position)&&aiAction!==null&&aiAction!==undefined){await place(aiAction,true);}
 }
 function schedule(){
@@ -473,9 +475,10 @@ function renderBoard(){
  if($('nav-label'))$('nav-label').textContent=`${node.ply}수`;
  if($('first'))$('first').disabled=$('previous').disabled=onReading||node.parent===null;
  if($('next'))$('next').disabled=$('last').disabled=onReading||!nextInBranch(doc,node.id,doc.branch_leaf);
- const passCand=(L.policy&&visible&&!preview)?(visible.mcts?.candidates||[]).find(c=>c.action===81&&c.visits>0):null;
+ const passCand=(L.policy&&visible&&!preview)?(visible.mcts?.candidates||[]).find(c=>c.action===81&&(c.visits>0||(visible.search_mode==='gumbel'&&(c.improved_policy??0)>=0.01))):null;
  const passOut=passCand?candidateOutcome(passCand,visible):null;
- if($('pass')){$('pass').disabled=Boolean(p.result||preview||moving||(!onReading&&controls.aiTurn(p))||(backend()==='local'&&!local)||placeMode!=='alternate');$('pass').textContent=passCand?`패스 (${passOut==='win'?'필승 · ':passOut==='loss'?'필패 · ':''}${(passCand.visit_share*100).toFixed(1)}%)`:'패스';}
+ const passShare=passCand?candidateShare(passCand,visible):0;
+ if($('pass')){$('pass').disabled=Boolean(p.result||preview||moving||(!onReading&&controls.aiTurn(p))||(backend()==='local'&&!local)||placeMode!=='alternate');$('pass').textContent=passCand?`패스 (${passOut==='win'?'필승 · ':passOut==='loss'?'필패 · ':''}${(passShare*100).toFixed(1)}%)`:'패스';}
  if($('preview-exit'))$('preview-exit').hidden=!preview;
  if($('preview-label'))$('preview-label').hidden=!(settings.layers.ownership&&visible);
 
@@ -515,7 +518,15 @@ function renderBoard(){
 }
 function renderAnalysis(){
  const analysis=visibleAnalysis(),values=blueEvaluation(analysis,doc.setup.komi),L=settings.layers;
+ const isGumbel=analysis?.search_mode==='gumbel';
  if($('analysis-source'))$('analysis-source').textContent=analysis?sourceLabel(analysis.source):'분석 전';
+ if($('analysis-search-mode')){
+  const showMode=Boolean(analysis&&analysis.source!=='rule');
+  $('analysis-search-mode').hidden=!showMode;
+  $('analysis-search-mode').textContent=isGumbel?'Gumbel SH':'PUCT';
+  $('analysis-search-mode').className=`search-mode-badge ${isGumbel?'gumbel':'puct'}`;
+ }
+ if($('candidate-share-head'))$('candidate-share-head').textContent=isGumbel?'개선 정책':'탐색 비중';
  if($('result-empty'))$('result-empty').hidden=Boolean(analysis);
  if($('result-body'))$('result-body').hidden=!analysis;
  if($('result-empty'))$('result-empty').textContent=!doc.model_id?'모델이 연결되지 않았어요. 양쪽 성을 직접 두며 국면을 살펴볼 수 있어요.':active().position.result?'대국이 종료되었어요. 이전 수로 돌아가 새 가지를 만들어 보세요.':'이 국면은 아직 분석 전이에요. [현재 국면 분석]을 누르거나 [📌 분석 고정]을 켜면 바로 분석돼요.';
@@ -565,14 +576,18 @@ function renderAnalysis(){
   const sharedHistMax=candidates.reduce((mx,c)=>Array.isArray(c.score_distribution)?Math.max(mx,...c.score_distribution):mx,0.0001);
   candidates.forEach((candidate,i)=>{
    const outcome=candidateOutcome(candidate,analysis);
+   const share=candidateShare(candidate,analysis);
    const button=document.createElement('button');button.className=`candidate-row${outcome==='win'?' proven-win':outcome==='loss'?' proven-loss':''}`;
    const probability=candidate.win_probability===null?null:analysis.perspective==='first'?candidate.win_probability:1-candidate.win_probability;
    const scoreDiff=(i>0&&candidate.expected_score!==null&&best?.expected_score!==null)?(candidate.expected_score-best.expected_score):null;
    const winDiffPp=(i>0&&candidate.win_probability!==null&&best?.win_probability!==null)?((candidate.win_probability-best.win_probability)*100):null;
    const diffLine=(i>0&&(scoreDiff!==null||winDiffPp!==null))?`<small class="candidate-diff">1순위 대비 ${scoreDiff!==null?`${signed(scoreDiff)}집`:'—'} · ${winDiffPp!==null?`${signed(winDiffPp)}%p`:'—'}</small>`:'';
    const provenTag=outcome==='win'?'<span class="proven-badge win">필승</span>':outcome==='loss'?'<span class="proven-badge loss">필패</span>':'';
+   const gStageMap={selected:['1순위','selected'],finalist:['결선',''],active:['진행',''],eliminated:['탈락','eliminated'],unconsidered:['후보외','eliminated']};
+   const gInfo=isGumbel&&candidate.gumbel_status&&gStageMap[candidate.gumbel_status];
+   const gStageTag=gInfo?`<span class="gumbel-stage-badge${gInfo[1]?` ${gInfo[1]}`:''}">${gInfo[0]}</span>`:'';
    const histHtml=L.margin?candidateHistogramSvg(candidate,sharedHistMax,analysis.raw_network?.score_min):'';
-   button.innerHTML=`<span><span class="candidate-rank">${i+1}</span><span class="candidate-coordinate">${coord(candidate.action)}${provenTag}<small>모델 선호도 ${pct(analysis.raw_network?.policy[candidate.action])}</small></span></span><span>${pct(candidate.visit_share)}<small>${candidate.visits} visits</small>${diffLine}</span><span>${L.win?pct(probability):'—'}<small>Q ${signed(candidate.q===null?null:(analysis.perspective==='first'?1:-1)*candidate.q)} · 덤 전 ${L.margin?signed(candidate.expected_score===null?null:(analysis.perspective==='first'?1:-1)*candidate.expected_score):'—'}집</small></span>${histHtml}`;
+   button.innerHTML=`<span><span class="candidate-rank">${i+1}</span><span class="candidate-coordinate">${coord(candidate.action)}${provenTag}<small>모델 선호도 ${pct(analysis.raw_network?.policy[candidate.action])}</small></span></span><span>${pct(share)}<small>${candidate.visits} visits${gStageTag}</small>${diffLine}</span><span>${L.win?pct(probability):'—'}<small>Q ${signed(candidate.q===null?null:(analysis.perspective==='first'?1:-1)*candidate.q)} · 덤 전 ${L.margin?signed(candidate.expected_score===null?null:(analysis.perspective==='first'?1:-1)*candidate.expected_score):'—'}집</small></span>${histHtml}`;
    button.addEventListener('click',()=>run(()=>place(candidate.action)));$('candidates').append(button);
   });
  }
@@ -592,7 +607,7 @@ function renderAnalysis(){
  if($('pv-import'))$('pv-import').disabled=!pv.length||moving;
  if(analysis){
   const model=analysis.model;
-  const text=[`출처: ${sourceLabel(analysis.source)}`,`모델 원승률: ${pct(values.rawWin)}`,`예상 영토 차이(덤 전): ${signed(values.rawScore)}`,`탐색 시간: ${(analysis.cumulative_elapsed_seconds??analysis.mcts.elapsed_seconds).toFixed(3)}초`,
+  const text=[`출처: ${sourceLabel(analysis.source)}`,`탐색 알고리즘: ${isGumbel?'Gumbel (Sequential Halving)':'PUCT'}`,`모델 원승률: ${pct(values.rawWin)}`,`예상 영토 차이(덤 전): ${signed(values.rawScore)}`,`탐색 시간: ${(analysis.cumulative_elapsed_seconds??analysis.mcts.elapsed_seconds).toFixed(3)}초`,
    `모델 SHA: ${model?.sha256?.slice(0,16)||'규칙 판정'}`,`국면: ${analysis.state_id.slice(0,16)}`,`실행: ${analysis.provider||analysis.execution||analysis.backend} · 규칙 ${analysis.position.ruleset_version}`,`전술 상태: ${analysis.exact?.status||'없음'} · 위협 ${(analysis.exact?.threats||[]).map(coord).join(', ')||'없음'}`,`정책 엔트로피: ${(-(analysis.raw_network?.policy||[]).reduce((sum,p)=>sum+(p>0?p*Math.log(p):0),0)).toFixed(3)}`,
    ...(analysis.proven_winner?[`증명된 승자: ${analysis.proven_winner==='first'?'파란 성':'빨간 성'}`]:[])];
   if($('more-metrics'))$('more-metrics').replaceChildren(...text.map(t=>{const div=document.createElement('div');div.textContent=t;return div;}));
@@ -642,6 +657,19 @@ function renderSettings(){
  for(const s of SIDES){
   setSwitch(`continuous-${s}`,controls.continuous[s]);
   if($(`continuous-${s}-tag`))$(`continuous-${s}-tag`).hidden=!controls.aiSide[s];
+ }
+
+ // 2.35 탐색 알고리즘 (PUCT / Gumbel SH)
+ const modeTabs=$('search-mode-tabs');
+ if(modeTabs){
+  for(const btn of (modeTabs.children||[])){
+   const activeMode=btn.dataset?.mode===settings.searchMode;
+   btn.classList?.toggle?.('active',activeMode);
+   btn.setAttribute?.('aria-pressed',String(activeMode));
+  }
+ }
+ if($('search-mode-hint')){
+  $('search-mode-hint').textContent=settings.searchMode==='gumbel'?'Gumbel SH: 단계별 후보 압축 · 개선 정책(%)과 결선/탈락 상태 시각화':'PUCT: 방문 비중 비례 원 크기 시각화';
  }
  
  // 2.4 최대 시간 or visit
@@ -951,6 +979,20 @@ $('analysis-pin')?.addEventListener('change',e=>{
  render();
  if(settings.analysisPinned&&!analyzing&&!moving&&!batching)schedule();
 });
+
+// Search Mode Toggle (PUCT vs Gumbel)
+for(const mode of ['puct','gumbel']){
+ $(`search-mode-${mode}`)?.addEventListener('click',()=>{
+  if(settings.searchMode===mode)return;
+  cancel();
+  settings.searchMode=mode;
+  saveSettings();
+  render();
+  if(!moving&&!batching&&modelAvailable()){
+   if(settings.analysisPinned||controls.anyContinuous()||controls.aiTurn(active()?.position))schedule();
+  }
+ });
+}
 
 // 3. 시각화 스택 버튼 및 고정 토글
 const VIS_KEYS=[

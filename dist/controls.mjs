@@ -105,34 +105,42 @@ export function isProvenLossCandidate(c,result){
  return c.visits>0&&c.q===-1;
 }
 
-export function pickAiAction(result,temperature=0,rng=Math.random,{ignoreProvenLoss=true,forceProvenWin=true}={}){
+export function pickAiAction(result,temperature=0,rng=Math.random,options={}){
+ if(typeof rng==='object'&&rng!==null){options=rng;rng=Math.random;}
+ if(typeof rng!=='function')rng=Math.random;
+ const {ignoreProvenLoss=true,forceProvenWin=true}=options;
  const bestAction=result?.recommended_action??null;
  if(bestAction===null)return null;
  const temp=normalizeTemperature(temperature,{fallback:0});
  const candidates=result?.mcts?.candidates||[];
  const visited=candidates.filter(c=>c&&c.visits>0);
- const winning=(visited.length?visited:candidates).filter(c=>isProvenWinCandidate(c,result));
+ const isGumbel=result?.search_mode==='gumbel';
+ const rawPool=isGumbel?candidates.filter(c=>c&&(c.visits>0||(typeof c.improved_policy==='number'&&c.improved_policy>0))):visited;
+ const winning=(rawPool.length?rawPool:candidates).filter(c=>isProvenWinCandidate(c,result));
  if(forceProvenWin){
    if(winning.length>0)return winning[0].action;
    if(result?.source==='tactical'||(result?.proven_winner&&(!result?.perspective||result.proven_winner===result.perspective)))return bestAction;
  }
  if(temp<=0){
-   if(ignoreProvenLoss&&visited.length>1){
-     const bestCand=visited.find(c=>c.action===bestAction);
+   if(ignoreProvenLoss&&rawPool.length>1){
+     const bestCand=rawPool.find(c=>c.action===bestAction);
      if(bestCand&&isProvenLossCandidate(bestCand,result)){
-       const nonLosing=visited.filter(c=>!isProvenLossCandidate(c,result));
+       const nonLosing=rawPool.filter(c=>!isProvenLossCandidate(c,result));
        if(nonLosing.length)return nonLosing[0].action;
      }
    }
    return bestAction;
  }
- if(visited.length<=1)return bestAction;
- const nonLosing=ignoreProvenLoss?visited.filter(c=>!isProvenLossCandidate(c,result)):visited;
- const pool=nonLosing.length?nonLosing:visited;
+ if(rawPool.length<=1)return bestAction;
+ const nonLosing=ignoreProvenLoss?rawPool.filter(c=>!isProvenLossCandidate(c,result)):rawPool;
+ const pool=nonLosing.length?nonLosing:rawPool;
  if(pool.length<=1)return pool[0].action;
- const maxVisits=Math.max(...pool.map(c=>c.visits));
  const invTemp=1/temp;
- const weights=pool.map(c=>Math.pow(c.visits/maxVisits,invTemp));
+ const useImproved=isGumbel&&pool.some(c=>typeof c.improved_policy==='number'&&c.improved_policy>0);
+ const scores=pool.map(c=>useImproved?Math.max(0,c.improved_policy||0):c.visits);
+ const maxScore=Math.max(...scores);
+ if(!Number.isFinite(maxScore)||maxScore<=0)return bestAction;
+ const weights=scores.map(s=>Math.pow(s/maxScore,invTemp));
  const total=weights.reduce((a,b)=>a+b,0);
  if(!Number.isFinite(total)||total<=0)return bestAction;
  let r=rng()*total;
