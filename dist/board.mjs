@@ -73,6 +73,14 @@ export function boardSvg(position,{actions=[],lastAction=null,analysis=null,show
       }
     }
   }
+  const legal=new Set(position.legal_actions||[]),marks=new Set(position.terminal_marks||[]);
+  const tacticalStatus=analysis?.exact?.status;
+  const candidateActions=new Set((analysis?.mcts?.candidates||[]).map(c=>c.action));
+  const isTacticalPrunedLoss=action=>{
+    if(!showCandidates||!analysis?.mcts||!legal.has(action))return false;
+    if(tacticalStatus==='proven_loss')return true;
+    return tacticalStatus==='must_defend'&&candidateActions.size>0&&!candidateActions.has(action);
+  };
   const pvMap=new Map();
   if(showPV&&analysis?.mcts?.principal_variation?.length){
     analysis.mcts.principal_variation.forEach((action,i)=>{
@@ -82,7 +90,6 @@ export function boardSvg(position,{actions=[],lastAction=null,analysis=null,show
       }
     });
   }
-  const legal=new Set(position.legal_actions||[]),marks=new Set(position.terminal_marks||[]);
   let svg=`<svg class="kingdom-board${readingMode?' reading-board':''}" viewBox="0 0 602 602" role="group" aria-label="그레이트 킹덤 9×9 판">
     <defs>
       <linearGradient id="redStone" x2="1" y2="1"><stop stop-color="#f78154"/><stop offset=".55" stop-color="#ee6338"/><stop offset="1" stop-color="#d84a20"/></linearGradient>
@@ -131,8 +138,8 @@ export function boardSvg(position,{actions=[],lastAction=null,analysis=null,show
       }else{
         svg+=`<text class="candidate-number${isGumbel?' gumbel':''}" style="font-size:${numSize}px" x="${x}" y="${cy}">${(share*100).toFixed(1)}%</text>`;
       }
-    } else if(showCandidates&&extra) {
-      const outcome=candidateOutcome(extra,analysis);
+    } else if(showCandidates&&(extra||isTacticalPrunedLoss(i))) {
+      const outcome=extra?candidateOutcome(extra,analysis):'loss';
       const cy=y-(tile.predictedOwner?5:0);
       svg+=`<circle cx="${x}" cy="${cy}" r="15" class="candidate-dot compact ${outcome==='win'?'proven-win':'proven-loss'}"/><text class="candidate-proven compact ${outcome}" x="${x}" y="${cy}">${outcome==='win'?'필승':'필패'}</text>`;
     }
@@ -148,15 +155,17 @@ export function boardSvg(position,{actions=[],lastAction=null,analysis=null,show
     const passedBlue=position.side_to_move==='second';
     svg+=`<g class="pass-badge" pointer-events="none" aria-label="${passedBlue?'파란':'빨간'} 성 패스"><rect x="233" y="575" width="136" height="24" rx="12" fill="${passedBlue?'#4173e6':'#ee6338'}" filter="url(#castleShadow)"/><text x="301" y="587" text-anchor="middle" dominant-baseline="central" fill="#ffffff" font-size="11.5" font-weight="750">${passedBlue?'파란':'빨간'} 성 패스</text></g>`;
   }
-  if(passCandidate){
-    const passOutcome=candidateOutcome(passCandidate,analysis);
-    const passShare=candidateShare(passCandidate,analysis);
-    const label=`${passOutcome==='win'?'패스 필승':passOutcome==='loss'?'패스 필패':'패스'} ${(passShare*100).toFixed(1)}%`;
-    const w=passOutcome?148:128,rx=580-w;
+  const showTacticalPassLoss=!passCandidate&&isTacticalPrunedLoss(81);
+  if(passCandidate||showTacticalPassLoss){
+    const passOutcome=passCandidate?candidateOutcome(passCandidate,analysis):'loss';
+    const passShare=passCandidate?candidateShare(passCandidate,analysis):0;
+    const label=passCandidate?`${passOutcome==='win'?'패스 필승':passOutcome==='loss'?'패스 필패':'패스'} ${(passShare*100).toFixed(1)}%`:'패스 필패';
+    const w=passCandidate?(passOutcome?148:128):96,rx=580-w;
     const fill=passOutcome==='win'?'#15803d':passOutcome==='loss'?'#fee2e2':passIsBest?(isGumbel?'#4f46e5':'#327967'):(isGumbel?'#eef2ff':'#e0ece8');
     const stroke=passOutcome==='win'?'#fbbf24':passOutcome==='loss'?'#ef4444':passIsBest?(isGumbel?'#4338ca':'#327967'):(isGumbel?'#a5b4fc':'#b5cec4');
     const textFill=passOutcome==='win'?'#ffffff':passOutcome==='loss'?'#b91c1c':passIsBest?'#ffffff':(isGumbel?'#3730a3':'#2c5646');
-    svg+=`<g class="pass-candidate-badge${passOutcome==='win'?' proven-win':passOutcome==='loss'?' proven-loss':''}" pointer-events="none" aria-label="패스 착수 비중 ${(passShare*100).toFixed(1)}%${passOutcome==='win'?' 필승':passOutcome==='loss'?' 필패':''}"><rect x="${rx}" y="575" width="${w}" height="24" rx="12" fill="${fill}" stroke="${stroke}" stroke-width="1.5" filter="url(#castleShadow)"/><text x="${rx+w/2}" y="587" text-anchor="middle" dominant-baseline="central" fill="${textFill}" font-size="11" font-weight="750">${label}</text></g>`;
+    const ariaLabel=passCandidate?`패스 착수 비중 ${(passShare*100).toFixed(1)}%${passOutcome==='win'?' 필승':passOutcome==='loss'?' 필패':''}`:'패스 필패';
+    svg+=`<g class="pass-candidate-badge${passOutcome==='win'?' proven-win':passOutcome==='loss'?' proven-loss':''}" pointer-events="none" aria-label="${ariaLabel}"><rect x="${rx}" y="575" width="${w}" height="24" rx="12" fill="${fill}" stroke="${stroke}" stroke-width="1.5" filter="url(#castleShadow)"/><text x="${rx+w/2}" y="587" text-anchor="middle" dominant-baseline="central" fill="${textFill}" font-size="11" font-weight="750">${label}</text></g>`;
   }
   return svg+'</svg>';
 }

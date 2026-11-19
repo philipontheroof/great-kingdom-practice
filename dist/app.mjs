@@ -1,6 +1,6 @@
 import {newStudy,addNode,pathTo,lineThrough,importDocument,blueEvaluation,studyForSave,resolveBranchLeaf,nextInBranch,branchLeaves,FORMAT} from './study.mjs?v=25';
 import {facts,stateGroups,territory,canonicalState,positionPayload} from './engine.mjs?v=25';
-import {boardSvg,candidateOutcome,candidateShare} from './board.mjs?v=25';
+import {boardSvg,candidateOutcome,candidateShare} from './board.mjs?v=27';
 import {STORE,persistStudy,retryAnalysis} from './client.mjs?v=25';
 import {PracticeControls,missingNodes,normalizeBudget,analysisFloor,budgetPayload,budgetReached,budgetLabel,BUDGET_RANGE,BUDGET_DEFAULT,TEMPERATURE_DEFAULT,normalizeTemperature,pickAiAction} from './controls.mjs?v=25';
 import {timelineSvg} from './timeline.mjs?v=25';
