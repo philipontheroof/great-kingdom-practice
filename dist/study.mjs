@@ -87,6 +87,44 @@ export function lineThrough(doc,id,leafId=null) {
   return line;
 }
 
+export function ancestorsOf(doc,id) {
+  const map=new Map(doc.nodes.map(n=>[n.id,n])),ancestors=[],seen=new Set();
+  let node=map.get(id);
+  if(!node)throw Error('선택한 국면이 없습니다.');
+  while(node){
+    if(seen.has(node.id))throw Error('순환 분기입니다.');
+    seen.add(node.id);ancestors.push(node);node=map.get(node.parent);
+  }
+  return ancestors.reverse();
+}
+
+export function cloneStudyAsLeaf(doc,targetId,storageId=null) {
+  const line=ancestorsOf(doc,targetId);
+  const target=line.at(-1);
+  const cloneVal=v=>(typeof structuredClone==='function'?structuredClone(v):JSON.parse(JSON.stringify(v)));
+  const nodes=line.map((n,i)=>({
+    id:n.id,
+    parent:n.parent,
+    action:n.action,
+    ply:n.ply,
+    notes:n.notes||'',
+    position:cloneVal(n.position),
+    analysis:i===line.length-1?null:(n.analysis?cloneVal(n.analysis):null),
+  }));
+  const baseTitle=(doc.title||'새로운 연습').replace(/\s*\(\d+수 복제\)$/,'');
+  return {
+    format:doc.format||FORMAT,
+    ruleset_version:doc.ruleset_version||RULESET,
+    title:`${baseTitle} (${target.ply}수 복제)`.slice(0,120),
+    setup:cloneVal(doc.setup),
+    model_id:doc.model_id??null,
+    selected:target.id,
+    branch_leaf:target.id,
+    ...(storageId?{storage_id:storageId}:{}),
+    nodes,
+  };
+}
+
 export function nextInBranch(doc,nodeId,leafId=doc?.branch_leaf) {
   const line=lineThrough(doc,nodeId,resolveBranchLeaf(doc,nodeId,leafId));
   const idx=line.findIndex(n=>n.id===nodeId);

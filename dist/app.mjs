@@ -1,11 +1,11 @@
-import {newStudy,addNode,pathTo,lineThrough,importDocument,blueEvaluation,studyForSave,resolveBranchLeaf,nextInBranch,branchLeaves,FORMAT} from './study.mjs?v=22';
-import {facts,stateGroups,territory,canonicalState,positionPayload} from './engine.mjs?v=22';
-import {boardSvg,candidateOutcome,candidateShare} from './board.mjs?v=22';
-import {STORE,persistStudy,retryAnalysis} from './client.mjs?v=22';
-import {PracticeControls,missingNodes,normalizeBudget,analysisFloor,budgetPayload,budgetReached,budgetLabel,BUDGET_RANGE,BUDGET_DEFAULT,TEMPERATURE_DEFAULT,normalizeTemperature,pickAiAction} from './controls.mjs?v=22';
-import {timelineSvg} from './timeline.mjs?v=22';
-import {LocalEngine} from './local-client.mjs?v=22';
-import {loadStaticConfig,loadStaticManifest} from './deployment.mjs?v=22';
+import {newStudy,addNode,pathTo,lineThrough,importDocument,blueEvaluation,studyForSave,resolveBranchLeaf,nextInBranch,branchLeaves,cloneStudyAsLeaf,FORMAT} from './study.mjs?v=23';
+import {facts,stateGroups,territory,canonicalState,positionPayload} from './engine.mjs?v=23';
+import {boardSvg,candidateOutcome,candidateShare} from './board.mjs?v=23';
+import {STORE,persistStudy,retryAnalysis} from './client.mjs?v=23';
+import {PracticeControls,missingNodes,normalizeBudget,analysisFloor,budgetPayload,budgetReached,budgetLabel,BUDGET_RANGE,BUDGET_DEFAULT,TEMPERATURE_DEFAULT,normalizeTemperature,pickAiAction} from './controls.mjs?v=23';
+import {timelineSvg} from './timeline.mjs?v=23';
+import {LocalEngine} from './local-client.mjs?v=23';
+import {loadStaticConfig,loadStaticManifest} from './deployment.mjs?v=23';
 const staticOnly=document.documentElement?.dataset?.execution==='local';
 
 const $=id=>document.getElementById(id),controls=new PracticeControls(),shown=new Map(),SETTINGS='gk-practice-settings-v1';
@@ -482,6 +482,7 @@ function renderBoard(){
  const passOut=passCand?candidateOutcome(passCand,visible):null;
  const passShare=passCand?candidateShare(passCand,visible):0;
  if($('pass')){$('pass').disabled=Boolean(p.result||preview||moving||(!onReading&&controls.aiTurn(p))||(backend()==='local'&&!local)||placeMode!=='alternate');$('pass').textContent=passCand?`패스 (${passOut==='win'?'필승 · ':passOut==='loss'?'필패 · ':''}${(passShare*100).toFixed(1)}%)`:'패스';}
+ if($('clone-leaf-button'))$('clone-leaf-button').disabled=Boolean(onReading||moving||batching||!node);
  if($('preview-exit'))$('preview-exit').hidden=!preview;
  if($('preview-label'))$('preview-label').hidden=!(settings.layers.ownership&&visible);
 
@@ -773,6 +774,7 @@ function renderSettings(){
  const who=SIDES.filter(s=>controls.aiSide[s]).map(sideName).join('·');
  const pondering=analyzing&&analysisKind==='ponder';
  if($('play-status'))$('play-status').textContent=placeMode!=='alternate'?'성 배치 모드 · AI 착수 대기':!who?'AI 착수 꺼짐 · 양쪽을 직접 둡니다':isLeaf?(pondering?`AI가 ${who}을(를) 둡니다 · 미리 탐색 중…`:`AI가 ${who}을(를) 둡니다`):`AI ${who} 대기 중 · 과거 수 탐색 중`;
+ if($('play-clone-leaf'))$('play-clone-leaf').hidden=Boolean(isReading()||!node||node.position?.result||isLeaf);
 
  // 2. 일반 시각화
  setSwitch('territory-toggle',settings.territory);setSwitch('numbers-toggle',settings.numbers);
@@ -924,6 +926,23 @@ async function batch(){if(batching){cancel();render();return;}if(!modelAvailable
  const a=await search(n,budget,{signal:controller.signal});if(study!==doc||epoch!==controls.epoch)break;acceptResult(a,n,model,execution);completed++;renderTimeline();}
  }finally{if(epoch===controls.epoch){batching=false;analysisController=null;if($('batch-status'))$('batch-status').textContent=`${completed}/${nodes.length} 국면 완료`;render();}}
 }
+async function cloneLeafHere(){
+ const node=active();
+ if(!node||isReading()||moving||batching)return;
+ cancel();
+ if(!saveNow())throw Error('현재 기보를 먼저 저장하지 못했어요.');
+ const storageId=globalThis.crypto?.randomUUID?.()??`s-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+ const cloned=cloneStudyAsLeaf(doc,node.id,storageId);
+ doc=cloned;
+ shown.clear();
+ onceNode=null;
+ placeMode='alternate';
+ if(controls.anyAI())controls.playing=true;
+ saveNow();
+ render();
+ notice(`현재 국면(${node.ply}수)까지 새 기보 리프로 복제했어요. 원본은 [새 연습]에서 다시 열 수 있어요.`);
+ schedule();
+}
 function ask(title,message,ok='확인'){const d=$('confirm-dialog');if(!d)return Promise.resolve(true);if($('confirm-title'))$('confirm-title').textContent=title;if($('confirm-message'))$('confirm-message').textContent=message;if($('confirm-ok'))$('confirm-ok').textContent=ok;d.returnValue='';return new Promise(resolve=>{d.addEventListener('close',()=>resolve(d.returnValue==='ok'),{once:true});d.showModal();});}
 async function run(fn){try{await fn();}catch(e){if(e.name!=='AbortError')notice(e.message||'작업 실패',true);}}
 
@@ -950,6 +969,8 @@ $('reanalyze-button')?.addEventListener('click',()=>{
  const aiTurn=canAiPlay()&&isLeafNode(doc,n.id)&&controls.aiTurn(n.position);
  run(()=>startAnalysis({ai:aiTurn,kind:aiTurn?'ai':'once',force:true}));
 });
+$('clone-leaf-button')?.addEventListener('click',()=>run(cloneLeafHere));
+$('play-clone-leaf')?.addEventListener('click',()=>run(cloneLeafHere));
 $('once-auto-show')?.addEventListener('change',e=>{settings.onceAutoShow=e.target.checked;saveSettings();render();});
 for(const s of SIDES)$(`continuous-${s}`)?.addEventListener('change',e=>{
  controls.continuous[s]=e.target.checked;if(!controls.anyContinuous())controls.visualContinuous=false;saveSettings();
