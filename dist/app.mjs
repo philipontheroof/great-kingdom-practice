@@ -84,7 +84,7 @@ const active=()=>{const d=currentDoc();return d?.nodes.find(n=>n.id===d.selected
 const anchorNode=()=>doc?.nodes.find(n=>n.id===(reading?.anchorId??doc?.selected));
 const backend=()=>$('backend')?.value||(staticOnly?'local':'host');
 const modelAvailable=()=>backendReady&&Boolean(config?.models.some(m=>m.id===doc?.model_id))&&(backend()==='host'||localModel===doc?.model_id);
-const nodeAnalysis=n=>n?.analysis&&n.analysis.backend===backend()&&(!n.analysis.model||n.analysis.model.id===doc?.model_id)?n.analysis:null;
+const nodeAnalysis=n=>n?.analysis&&n.analysis.backend===backend()&&(!n.analysis.model||n.analysis.model.id===doc?.model_id)&&(n.analysis.search_mode||'puct')===settings.searchMode?n.analysis:null;
 const displayAnalysis=n=>{
  if(!n)return null;
  const a=shown.get(analysisKey(n))||nodeAnalysis(n);
@@ -163,8 +163,8 @@ async function streamHost(payload,onUpdate,signal){
  if(buffer.trim()){last=JSON.parse(buffer);onUpdate(last);}if(!last?.done)throw Error('분석 연결이 끝났어요. 다시 분석을 시작해 주세요.');return last;
  }finally{await reader.cancel().catch(()=>{});}
 }
-async function search(node,budget,{onUpdate=()=>{},signal}={}){
- const payload={...positionRequest(node),model_id:doc.model_id,search_mode:settings.searchMode,visits:1600,seconds:budget.unit==='seconds'?budget.value:2,continuous:true,...budgetPayload(budget)};
+async function search(node,budget,{onUpdate=()=>{},signal,force=false}={}){
+ const payload={...positionRequest(node),model_id:doc.model_id,search_mode:settings.searchMode,visits:1600,seconds:budget.unit==='seconds'?budget.value:2,continuous:true,...budgetPayload(budget),...(force?{force:true}:{})};
  if(backend()==='host')delete payload.max_seconds;
  const inner=new AbortController(),relay=()=>inner.abort();signal?.addEventListener('abort',relay,{once:true});
  let last=null,reached=false;
@@ -339,12 +339,13 @@ async function setTurnSide(side){
  if(!isReading()&&placeMode==='alternate')schedule();
 }
 
-async function startAnalysis({ai=false,kind=ai?'ai':'once'}={}){
+async function startAnalysis({ai=false,kind=ai?'ai':'once',force=false}={}){
  if(!active()||moving||batching||!modelAvailable()||(ai&&!canAiPlay()))return;
  cancel();const node=active(),nodeKey=analysisKey(node),readingRef=reading,study=doc,model=doc.model_id,execution=backend(),token=controls.begin(nodeKey,model,execution),controller=new AbortController();analysisController=controller;analyzing=true;analysisKind=kind;
+ if(force){node.analysis=null;shown.delete(nodeKey);}
  const ponder=kind==='ponder',budget=ai?settings.play[node.position.side_to_move]:ponder?{unit:'none',value:null}:settings.analysisLimit;if(!ponder)render();else renderSettings();
  const valid=()=>study===doc&&reading===readingRef&&controls.accepts(token,analysisKey(active()),doc.model_id,backend());let result;
- try{result=await search(node,budget,{signal:controller.signal,onUpdate:r=>{if(valid()&&!ponder){acceptResult(r,node,model,execution);if(r.done||Date.now()-lastPaint>=180){lastPaint=Date.now();render();}}}});
+ try{result=await search(node,budget,{force,signal:controller.signal,onUpdate:r=>{if(valid()&&!ponder){acceptResult(r,node,model,execution);if(r.done||Date.now()-lastPaint>=180){lastPaint=Date.now();render();}}}});
  if(!valid())return;if(!ponder){acceptResult(result,node,model,execution);notice('');}
  }catch(error){if(error.name!=='AbortError'&&valid()&&!ponder)notice(error.message,true);return;}
  finally{analyzing=false;analysisKind=null;analysisController=null;if(valid()){if(!ponder)render();else renderSettings();}}
@@ -587,7 +588,8 @@ function renderAnalysis(){
    const gInfo=isGumbel&&candidate.gumbel_status&&gStageMap[candidate.gumbel_status];
    const gStageTag=gInfo?`<span class="gumbel-stage-badge${gInfo[1]?` ${gInfo[1]}`:''}">${gInfo[0]}</span>`:'';
    const histHtml=L.margin?candidateHistogramSvg(candidate,sharedHistMax,analysis.raw_network?.score_min):'';
-   button.innerHTML=`<span><span class="candidate-rank">${i+1}</span><span class="candidate-coordinate">${coord(candidate.action)}${provenTag}<small>모델 선호도 ${pct(analysis.raw_network?.policy[candidate.action])}</small></span></span><span>${pct(share)}<small>${candidate.visits} visits${gStageTag}</small>${diffLine}</span><span>${L.win?pct(probability):'—'}<small>Q ${signed(candidate.q===null?null:(analysis.perspective==='first'?1:-1)*candidate.q)} · 덤 전 ${L.margin?signed(candidate.expected_score===null?null:(analysis.perspective==='first'?1:-1)*candidate.expected_score):'—'}집</small></span>${histHtml}`;
+   const orbitNote=candidate.orbit_size>1?` · 대칭 ${candidate.orbit_size}`:'';
+   button.innerHTML=`<span><span class="candidate-rank">${i+1}</span><span class="candidate-coordinate">${coord(candidate.action)}${provenTag}<small>모델 선호도 ${pct(analysis.raw_network?.policy[candidate.action])}</small></span></span><span>${pct(share)}<small>${candidate.visits} visits${orbitNote}${gStageTag}</small>${diffLine}</span><span>${L.win?pct(probability):'—'}<small>Q ${signed(candidate.q===null?null:(analysis.perspective==='first'?1:-1)*candidate.q)} · 덤 전 ${L.margin?signed(candidate.expected_score===null?null:(analysis.perspective==='first'?1:-1)*candidate.expected_score):'—'}집</small></span>${histHtml}`;
    button.addEventListener('click',()=>run(()=>place(candidate.action)));$('candidates').append(button);
   });
  }
@@ -648,8 +650,9 @@ function renderSettings(){
  }
  if($('stat-speed'))$('stat-speed').textContent=vpsText;
  
- // 2.2 현재 국면 분석 버튼 & 분석 고정 토글
+ // 2.2 현재 국면 분석 버튼 & 강제 재탐색 & 분석 고정 토글
  if($('analyze-button')){$('analyze-button').textContent=analyzing?'분석 중지':'현재 국면 분석';$('analyze-button').classList.toggle('active',analyzing);$('analyze-button').disabled=moving||batching||!modelAvailable()||Boolean(node?.position?.result&&!analyzing);}
+ if($('reanalyze-button')){$('reanalyze-button').disabled=moving||batching||!modelAvailable()||Boolean(node?.position?.result);}
  setSwitch('analysis-pin',settings.analysisPinned);
  setSwitch('once-auto-show',settings.onceAutoShow);
  
@@ -925,6 +928,13 @@ $('analyze-button')?.addEventListener('click',()=>{
  onceNode=n.id;controls.visible=true;render();
  run(()=>startAnalysis({kind:'once'}));
 });
+$('reanalyze-button')?.addEventListener('click',()=>{
+ const n=active();if(!n||moving||batching||!modelAvailable()||n.position?.result)return;
+ cancel();
+ onceNode=n.id;controls.visible=true;
+ const aiTurn=canAiPlay()&&isLeafNode(doc,n.id)&&controls.aiTurn(n.position);
+ run(()=>startAnalysis({ai:aiTurn,kind:aiTurn?'ai':'once',force:true}));
+});
 $('once-auto-show')?.addEventListener('change',e=>{settings.onceAutoShow=e.target.checked;saveSettings();render();});
 for(const s of SIDES)$(`continuous-${s}`)?.addEventListener('change',e=>{
  controls.continuous[s]=e.target.checked;if(!controls.anyContinuous())controls.visualContinuous=false;saveSettings();
@@ -984,12 +994,17 @@ $('analysis-pin')?.addEventListener('change',e=>{
 for(const mode of ['puct','gumbel']){
  $(`search-mode-${mode}`)?.addEventListener('click',()=>{
   if(settings.searchMode===mode)return;
+  const cur=active();
+  const hadAnalysis=Boolean(visibleAnalysis()||cur?.analysis);
   cancel();
   settings.searchMode=mode;
   saveSettings();
   render();
-  if(!moving&&!batching&&modelAvailable()){
-   if(settings.analysisPinned||controls.anyContinuous()||controls.aiTurn(active()?.position))schedule();
+  if(cur&&!moving&&!batching&&modelAvailable()&&!cur.position?.result){
+   const aiTurn=canAiPlay()&&isLeafNode(doc,cur.id)&&controls.aiTurn(cur.position);
+   if(aiTurn||settings.analysisPinned||controls.anyContinuous()||hadAnalysis){
+    run(()=>startAnalysis({ai:aiTurn,kind:aiTurn?'ai':(settings.analysisPinned?'pinned':'once')}));
+   }
   }
  });
 }

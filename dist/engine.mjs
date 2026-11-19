@@ -46,3 +46,82 @@ export function canonicalState(s){const hex=floatHex(s.komi);return JSON.stringi
 function floatHex(x){if(x===0)return '0x0.0p+0';const b=new ArrayBuffer(8),v=new DataView(b);v.setFloat64(0,x,false);const bits=v.getBigUint64(0,false),negative=Boolean(bits>>63n),exponent=Number((bits>>52n)&0x7ffn),fraction=(bits&0xfffffffffffffn).toString(16).padStart(13,'0'),sign=negative?'-':'';if(exponent===0)return `${sign}0x0.${fraction}p-1022`;const power=exponent-1023;return `${sign}0x1.${fraction}p${power>=0?'+':''}${power}`;}
 export function positionPayload(s){const f=facts(s),scores={blue:f.territory.filter(x=>x===1).length,red:f.territory.filter(x=>x===2).length};const marks=[];if(s.result?.reason==='siege'){const losing=s.result.winner==='first'?2:1;for(const g of f.groups)if(g.color===losing&&!g.liberties.length)marks.push(...g.stones);}return {ruleset_version:s.ruleset_version,board:s.board.slice(),territory:f.territory,side_to_move:s.side_to_move,previous_move_was_pass:s.previous_move_was_pass,komi:s.komi,legal_actions:f.legal_actions,score:{...scores,blue_margin:scores.blue-scores.red-s.komi,red_margin:scores.red-scores.blue+s.komi},result:s.result?{winner:s.result.winner,reason:s.result.reason}:null,terminal_marks:marks.sort((a,b)=>a-b)};}
 export function replayPosition(payload={}){if(!payload||typeof payload!=='object'||(payload.ruleset_version??RULESET)!==RULESET)throw Error('unsupported ruleset or request');const actions=payload.actions??[];if(!Array.isArray(actions)||actions.length>2000)throw Error('actions must be <= 2000');let s=initialState(payload.setup??{});for(const a of actions){if(!Number.isInteger(a)||a<0||a>81)throw Error('invalid action');s=playAction(s,a);}return s;}
+
+export const D4_INVERSE=[0,3,2,1,4,5,6,7];
+export function transformAction(action,sym){
+  if(action===PASS||sym===0)return action;
+  const r=Math.floor(action/SIZE),c=action%SIZE,e=SIZE-1;
+  let tr=r,tc=c;
+  if(sym===1){tr=c;tc=e-r;}
+  else if(sym===2){tr=e-r;tc=e-c;}
+  else if(sym===3){tr=e-c;tc=r;}
+  else if(sym===4){tr=r;tc=e-c;}
+  else if(sym===5){tr=e-c;tc=e-r;}
+  else if(sym===6){tr=e-r;tc=c;}
+  else if(sym===7){tr=c;tc=r;}
+  return tr*SIZE+tc;
+}
+const D4_ACTION_PERMS=Array.from({length:8},(_,sym)=>Array.from({length:AREA},(__,a)=>transformAction(a,sym)));
+export function transformState(state,sym){
+  if(sym===0)return {...state,board:state.board.slice()};
+  const perm=D4_ACTION_PERMS[sym],board=Array(AREA).fill(0);
+  for(let a=0;a<AREA;a++)board[perm[a]]=state.board[a];
+  return {...state,board};
+}
+export function stateStabilizer(state){
+  const b=state.board,out=[];
+  for(let sym=0;sym<8;sym++){
+    if(sym===0){out.push(0);continue;}
+    const perm=D4_ACTION_PERMS[sym];let same=true;
+    for(let a=0;a<AREA;a++){if(b[perm[a]]!==b[a]){same=false;break;}}
+    if(same)out.push(sym);
+  }
+  return out;
+}
+export function canonicalD4State(state){
+  const b=state.board,stabilizer=[];let bestKey=null,bestSym=0,bestBoard=b;
+  for(let sym=0;sym<8;sym++){
+    const perm=D4_ACTION_PERMS[sym],tb=Array(AREA);
+    let same=true;
+    for(let a=0;a<AREA;a++){const v=b[a];tb[perm[a]]=v;}
+    for(let a=0;a<AREA;a++){if(tb[a]!==b[a]){same=false;break;}}
+    if(same)stabilizer.push(sym);
+    const key=tb.join('');
+    if(bestKey===null||key<bestKey){bestKey=key;bestSym=sym;bestBoard=tb;}
+  }
+  return {state:{...state,board:bestBoard},sym:bestSym,stabilizer};
+}
+export function moveOrbits(state,actions){
+  const stabilizer=stateStabilizer(state);
+  const actionSet=new Set(actions),sorted=[...actionSet].sort((a,b)=>a-b);
+  const repByAction=new Map(),membersByRep=new Map();
+  for(const a of sorted){
+    if(repByAction.has(a))continue;
+    const members=[],seen=new Set();
+    for(const sym of stabilizer){
+      const t=transformAction(a,sym);
+      if(actionSet.has(t)&&!seen.has(t)){seen.add(t);members.push(t);}
+    }
+    members.sort((x,y)=>x-y);
+    const rep=members[0];
+    membersByRep.set(rep,members);
+    for(const m of members)repByAction.set(m,rep);
+  }
+  return {repByAction,membersByRep};
+}
+export function inverseTransformEvaluation(raw,sym){
+  if(!raw||sym===0)return raw;
+  const perm=D4_ACTION_PERMS[sym],policy82=Array(82);
+  for(let a=0;a<AREA;a++)policy82[a]=raw.policy82[perm[a]];
+  policy82[PASS]=raw.policy82[PASS];
+  let ownership=raw.ownership,territory_probabilities=raw.territory_probabilities;
+  if(Array.isArray(raw.ownership)&&raw.ownership.length===3*AREA){
+    ownership=Array(3*AREA);
+    for(let c=0;c<3;c++)for(let a=0;a<AREA;a++)ownership[c*AREA+a]=raw.ownership[c*AREA+perm[a]];
+  }
+  if(Array.isArray(raw.territory_probabilities)&&raw.territory_probabilities.length===AREA){
+    territory_probabilities=Array(AREA);
+    for(let a=0;a<AREA;a++)territory_probabilities[a]=raw.territory_probabilities[perm[a]];
+  }
+  return {...raw,policy82,ownership,territory_probabilities};
+}

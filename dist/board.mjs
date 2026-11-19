@@ -52,7 +52,15 @@ export function boardSvg(position,{actions=[],lastAction=null,analysis=null,show
   const lastCell=(lastAction===null||lastAction===81)?null:(lastAction>=400?null:(lastAction>=100?(lastAction%100):lastAction));
   const isGumbel=analysis?.search_mode==='gumbel';
   const allVisited=(analysis?.mcts?.candidates||[]).filter(c=>c.visits>0||(isGumbel&&(c.improved_policy??0)>=0.01));
-  const candidates=allVisited.filter(c=>c.action!==81).slice(0,8);
+  const nonPassVisited=allVisited.filter(c=>c.action!==81);
+  const candidates=nonPassVisited.slice(0,8);
+  if(nonPassVisited.length>8&&nonPassVisited[7]?.orbit_size>1){
+    const rep=nonPassVisited[7].orbit_rep;
+    for(let k=8;k<nonPassVisited.length&&k<16;k++){
+      if(nonPassVisited[k].orbit_rep===rep)candidates.push(nonPassVisited[k]);
+      else break;
+    }
+  }
   const maxShare=candidates.reduce((mx,c)=>Math.max(mx,candidateShare(c,analysis)),0)||1;
   const passCandidate=showCandidates?allVisited.find(c=>c.action===81):null;
   const passIsBest=Boolean(passCandidate&&allVisited[0]?.action===81);

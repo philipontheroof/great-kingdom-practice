@@ -195,8 +195,9 @@ svg.placing-remove .board-cell{cursor:crosshair!important}
 .budget-compact select{border:none;border-left:1px solid #d4dce4;background:#f7f9fa;font-size:10px;padding:4px}
 
 /* Analyze Button & Pin Toggle Row */
-.analyze-pin-row{display:flex;align-items:center;gap:8px;margin-bottom:10px}
-.action-analyze-btn{flex:1;height:38px;font-size:13px;font-weight:750}
+.analyze-pin-row{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:10px}
+.action-analyze-btn{flex:1;min-width:120px;height:38px;font-size:13px;font-weight:750}
+.action-reanalyze-btn{height:38px;padding:0 10px;border:1px solid #cbd5e1;border-radius:8px;font-size:12px;font-weight:700;white-space:nowrap}
 .pin-toggle{display:inline-flex;align-items:center;gap:6px;padding:6px 9px;background:#f1f5f9;border:1px solid #cbd5e1;border-radius:8px;font-size:11px;font-weight:700;color:#475569;cursor:pointer;user-select:none;transition:all .15s ease;flex-shrink:0}
 .pin-toggle:hover{background:#e2e8f0;border-color:#94a3b8}
 .pin-toggle:has(input:checked){background:#e6f1ee;border-color:#5c9e90;color:#1e5b4f}

@@ -1,4 +1,4 @@
-import {RULESET,features,positionPayload,replayPosition,canonicalState} from './engine.mjs';
+import {RULESET,features,positionPayload,replayPosition,canonicalState,canonicalD4State,inverseTransformEvaluation,transformState} from './engine.mjs';
 import {BrowserSearch} from './browser-search.mjs';
 import {decodeNetworkHeads} from './local-client.mjs';
 
@@ -6,14 +6,46 @@ let ort=null,session=null,manifest=null,backend=null,generation=0,modelCacheSour
 const rawCache=new Map(),treeCache=new Map(),MAX_RAW_CACHE=1024,MAX_TREE_CACHE=24;
 function lruGet(map,key){if(!map.has(key))return undefined;const val=map.get(key);map.delete(key);map.set(key,val);return val;}
 function lruSet(map,key,val,max){if(map.has(key))map.delete(key);map.set(key,val);while(map.size>max)map.delete(map.keys().next().value);}
-async function cachedInfer(state){
-  const key=`${manifest.model_id}:${canonicalState(state)}`;
-  const hit=lruGet(rawCache,key);
-  if(hit){rawCacheHits++;return hit;}
-  rawCacheMisses++;
-  const res=await infer(state);
-  lruSet(rawCache,key,res,MAX_RAW_CACHE);
-  return res;
+async function cachedInfer(state,{force=false}={}){
+  const {state:canon,sym:toCanon,stabilizer}=canonicalD4State(state);
+  const key=`${manifest.model_id}:d4:${canonicalState(canon)}`;
+  if(force)rawCache.delete(key);
+  let canonEval=lruGet(rawCache,key);
+  if(canonEval){
+    rawCacheHits++;
+  }else{
+    rawCacheMisses++;
+    if(stabilizer.length>1){
+      const byBoard=new Map();
+      const syms=[];
+      for(let sym=0;sym<8;sym++){
+        const ts=transformState(canon,sym),bkey=ts.board.join('');
+        let p=byBoard.get(bkey);
+        if(!p){p=infer(ts);byBoard.set(bkey,p);}
+        syms.push({sym,promise:p});
+      }
+      const evals=await Promise.all(syms.map(async x=>inverseTransformEvaluation(await x.promise,x.sym)));
+      const policy82=Array(82).fill(0),first=evals[0];
+      let value=0,winProb=0,expScore=0;
+      const hasOwnership=Array.isArray(first.ownership)&&first.ownership.length===243;
+      const hasTerr=Array.isArray(first.territory_probabilities)&&first.territory_probabilities.length===81;
+      const ownership=hasOwnership?Array(243).fill(0):first.ownership;
+      const terr=hasTerr?Array.from({length:81},()=>[0,0,0]):first.territory_probabilities;
+      for(const ev of evals){
+        for(let a=0;a<82;a++)policy82[a]+=ev.policy82[a]/8;
+        value+=ev.value/8;
+        winProb+=ev.win_probability/8;
+        expScore+=ev.expected_score/8;
+        if(hasOwnership)for(let i=0;i<243;i++)ownership[i]+=ev.ownership[i]/8;
+        if(hasTerr)for(let i=0;i<81;i++){terr[i][0]+=ev.territory_probabilities[i][0]/8;terr[i][1]+=ev.territory_probabilities[i][1]/8;terr[i][2]+=ev.territory_probabilities[i][2]/8;}
+      }
+      canonEval={...first,policy82,value:Math.max(-1,Math.min(1,value)),win_probability:winProb,expected_score:expScore,ownership,territory_probabilities:terr};
+    }else{
+      canonEval=await infer(canon);
+    }
+    lruSet(rawCache,key,canonEval,MAX_RAW_CACHE);
+  }
+  return inverseTransformEvaluation(canonEval,toCanon);
 }
 function isAllFinite(values){
   for(let i=0;i<values.length;i++)if(!Number.isFinite(values[i]))return false;
@@ -125,18 +157,22 @@ async function analyze(id,payload,options,runGeneration){
   // Keep the four raw heads available even when tactics bypass neural expansion.
   // BrowserSearch consumes this cached result for its root expansion.
   const targetCanonical=canonicalState(state),treeKey=`${manifest.model_id}:${searchMode}:${pos.state_id}`;
-  let cached=lruGet(treeCache,treeKey),raw,search;
+  const force=Boolean(payload.force);
+  if(force)treeCache.delete(treeKey);
+  let cached=force?undefined:lruGet(treeCache,treeKey),raw,search;
   if(cached){
     raw=cached.raw;search=cached.search;search.started=performance.now();
   }else{
     let promoted=null;
-    const entries=[...treeCache.values()].reverse();
-    for(const entry of entries){
-      const sub=entry.search.findSubtree(targetCanonical);
-      if(sub){promoted=sub;break;}
+    if(!force){
+      const entries=[...treeCache.values()].reverse();
+      for(const entry of entries){
+        const sub=entry.search.findSubtree(targetCanonical);
+        if(sub){promoted=sub;break;}
+      }
     }
-    raw=await cachedInfer(state);
-    search=promoted?BrowserSearch.fromNode(promoted,s=>cachedInfer(s),{searchMode}):new BrowserSearch(state,s=>s===state?raw:cachedInfer(s),{searchMode});
+    raw=await cachedInfer(state,{force});
+    search=promoted?BrowserSearch.fromNode(promoted,s=>cachedInfer(s),{searchMode,rootSymmetryQuotient:true}):new BrowserSearch(state,s=>s===state?raw:cachedInfer(s),{searchMode,rootSymmetryQuotient:true});
     lruSet(treeCache,treeKey,{search,raw},MAX_TREE_CACHE);
   }
   const initialVisits=search.rootVisits;

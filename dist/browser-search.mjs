@@ -1,4 +1,4 @@
-import {canonicalState,facts,playAction,positionPayload} from './engine.mjs';
+import {canonicalState,facts,moveOrbits,playAction,positionPayload,stateStabilizer} from './engine.mjs';
 const now=()=>globalThis.performance?.now?.()??Date.now();
 const opponent=p=>p==='first'?'second':'first';
 const winnerValue=(state,winner)=>state.side_to_move===winner?1:-1;
@@ -21,7 +21,7 @@ function flipScoreDistribution(dist,scoreMin){
 }
 
 export class BrowserSearch {
-  constructor(state,evaluateAsync,{cPuct=1.5,searchMode='puct',gumbelMaxConsidered=16,gumbelCVisit=50,gumbelCScale=1}={}) {
+  constructor(state,evaluateAsync,{cPuct=1.5,searchMode='puct',gumbelMaxConsidered=16,gumbelCVisit=50,gumbelCScale=1,rootSymmetryQuotient=false}={}) {
     if(typeof evaluateAsync!=='function')throw new TypeError('evaluateAsync must be a function');
     if(!Number.isFinite(cPuct)||cPuct<=0)throw new RangeError('cPuct must be positive');
     if(searchMode!=='puct'&&searchMode!=='gumbel')throw new RangeError('searchMode must be "puct" or "gumbel"');
@@ -31,6 +31,7 @@ export class BrowserSearch {
     this.state=state;this.evaluateAsync=evaluateAsync;this.cPuct=cPuct;
     this.searchMode=searchMode;this.gumbelMaxConsidered=gumbelMaxConsidered;
     this.gumbelCVisit=gumbelCVisit;this.gumbelCScale=gumbelCScale;
+    this.rootSymmetryQuotient=Boolean(rootSymmetryQuotient);
     this.started=now();this.rootVisits=0;this.root=null;this.raw=null;this.exact=null;
     this.source=state.result?'rule':null;this._earlyStop=false;
     this._gumbel=null;this._gumbelScores=null;this._gumbelSelectedAction=null;
@@ -49,8 +50,21 @@ export class BrowserSearch {
     if(!raw||!Array.isArray(raw.policy82)||raw.policy82.length!==82)throw new Error('evaluation policy82 must contain 82 values');
     if(!Number.isFinite(raw.value)||raw.value < -1||raw.value>1)throw new Error('evaluation value must be between -1 and 1');
     if(state===this.state)this.raw=raw;
-    const probs=actions.map(a=>Math.max(0,Number(raw.policy82[a])||0)),sum=probs.reduce((a,b)=>a+b,0);
-    const edges=actions.map((action,i)=>({action,prior:sum?probs[i]/sum:1/actions.length,visits:0,value:0,expectedScore:null,expectedScoreCount:0,scoreDistSum:null,scoreDistCount:0,scoreMin:null,child:null}));
+    let expandActions=actions,orbitMap=null;
+    if(isRoot&&this.rootSymmetryQuotient&&actions.length>1&&stateStabilizer(state).length>1){
+      const {membersByRep}=moveOrbits(state,actions);
+      if(membersByRep.size<actions.length){
+        orbitMap=membersByRep;
+        expandActions=[...membersByRep.keys()];
+      }
+    }
+    const probs=expandActions.map(a=>{
+      const members=orbitMap?.get(a);
+      if(!members)return Math.max(0,Number(raw.policy82[a])||0);
+      let s=0;for(const m of members)s+=Math.max(0,Number(raw.policy82[m])||0);
+      return s;
+    }),sum=probs.reduce((a,b)=>a+b,0);
+    const edges=expandActions.map((action,i)=>({action,orbitMembers:orbitMap?.get(action)??null,prior:sum?probs[i]/sum:1/expandActions.length,visits:0,value:0,expectedScore:null,expectedScoreCount:0,scoreDistSum:null,scoreDistCount:0,scoreMin:null,child:null}));
     const evalValue=t.status==='proven_loss'?-1:raw.value;
     const scoreDist=Array.isArray(raw.score_distribution)&&raw.score_distribution.length?Float64Array.from(raw.score_distribution):null;
     const scoreMin=Number.isFinite(raw.score_min)?raw.score_min:null;
@@ -394,7 +408,7 @@ export class BrowserSearch {
     }
     return null;
   }
-  static fromNode(node,evaluateAsync,{cPuct=1.5,searchMode='puct',gumbelMaxConsidered=16,gumbelCVisit=50,gumbelCScale=1}={}){
+  static fromNode(node,evaluateAsync,{cPuct=1.5,searchMode='puct',gumbelMaxConsidered=16,gumbelCVisit=50,gumbelCScale=1,rootSymmetryQuotient=false}={}){
     if(node.state.result===null&&node.expanded&&(!node.edges||!node.edges.length)){
       node.expanded=false;
       node.fullyExplored=false;
@@ -402,7 +416,7 @@ export class BrowserSearch {
     if(node.edges?.length&&!node.edges.every(e=>e.child?.fullyExplored)){
       node.fullyExplored=false;
     }
-    const search=new BrowserSearch(node.state,evaluateAsync,{cPuct,searchMode,gumbelMaxConsidered,gumbelCVisit,gumbelCScale});
+    const search=new BrowserSearch(node.state,evaluateAsync,{cPuct,searchMode,gumbelMaxConsidered,gumbelCVisit,gumbelCScale,rootSymmetryQuotient});
     search.root=node;
     search.rootVisits=node.visits;
     search.exact=node.tactical??null;
@@ -435,12 +449,20 @@ export class BrowserSearch {
       }
       return a.action-b.action;
     });
-    const candidates=ordered.map(e=>{
+    const candidates=[];
+    for(const e of ordered){
       const q=e.child?.provenWinner?winnerValue(this.state,e.child.provenWinner):e.visits?Math.max(-1,Math.min(1,e.value/e.visits)):null;
       const scoreDistribution=e.scoreDistSum&&e.scoreDistCount?Array.from(e.scoreDistSum,v=>v/e.scoreDistCount):null;
       const gumbelStatus=useGumbel?(e.action===selectedAction?'selected':(statusMap?.get(e.action)??'unconsidered')):null;
-      return {action:e.action,prior:e.prior,visits:e.visits,visit_share:n?e.visits/n:0,improved_policy:improvedPolicy?(improvedPolicy.get(e.action)??0):null,gumbel_score:gumbelScores?(gumbelScores.get(e.action)??null):null,gumbel_status:gumbelStatus,q,win_probability:q!==null?(q+1)/2:null,expected_score:e.visits?e.expectedScore??null:null,score_distribution:scoreDistribution,score_min:e.scoreMin??null,proven_winner:e.child?.provenWinner??null,fully_explored:Boolean(e.child?.fullyExplored)};
-    });
+      const members=e.orbitMembers&&e.orbitMembers.length>1?e.orbitMembers:[e.action];
+      const k=members.length;
+      const visitShare=(n?e.visits/n:0)/k;
+      const impPol=improvedPolicy?(improvedPolicy.get(e.action)??0)/k:null;
+      const priorShare=e.prior/k;
+      for(const action of members){
+        candidates.push({action,prior:priorShare,visits:e.visits,visit_share:visitShare,improved_policy:impPol,gumbel_score:gumbelScores?(gumbelScores.get(e.action)??null):null,gumbel_status:gumbelStatus,orbit_size:k,orbit_rep:e.action,q,win_probability:q!==null?(q+1)/2:null,expected_score:e.visits?e.expectedScore??null:null,score_distribution:scoreDistribution,score_min:e.scoreMin??null,proven_winner:e.child?.provenWinner??null,fully_explored:Boolean(e.child?.fullyExplored)});
+      }
+    }
     let pv=[],node=this.root;
     for(let i=0;i<40&&node?.edges?.length;i++){
       const isRoot=node===this.root;
