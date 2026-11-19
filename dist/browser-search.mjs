@@ -1,4 +1,4 @@
-import {canonicalState,facts,moveOrbits,playAction,positionPayload,stateStabilizer} from './engine.mjs';
+import {canonicalState,facts,moveOrbits,playAction,positionPayload,stateStabilizer} from './engine.mjs?v=22';
 const now=()=>globalThis.performance?.now?.()??Date.now();
 const opponent=p=>p==='first'?'second':'first';
 const winnerValue=(state,winner)=>state.side_to_move===winner?1:-1;
@@ -378,8 +378,9 @@ export class BrowserSearch {
     if(this.state.result)return this.snapshot();
     if(!this.root){const root={state:this.state,visits:0,value:0,evalValue:0,expectedScore:null,edges:null,expanded:false,fullyExplored:false,provenWinner:null};Object.assign(root,await this._expand(this.state,true));if(stopped())return this.snapshot();this.root=root;this.exact=this.root.tactical;this.source=this.exact.status==='immediate_win'?'tactical':'network';}
     const target=this.rootVisits+visits;
+    const initialRootVisits=this.rootVisits;
     if(this.searchMode==='gumbel'&&this.exact?.status!=='immediate_win'){
-      while(this.rootVisits<target&&now()<deadline&&!stopped()){
+      while(this.rootVisits<target&&(this.rootVisits===initialRootVisits||now()<deadline)&&!stopped()){
         if(this._earlyStop&&this.shouldStopEarly())break;
         if(!this._gumbel||this._gumbel.used>=this._gumbel.totalBudget){
           const finiteRemaining=gumbelBudget!==null?Math.max(0,gumbelBudget-this.rootVisits):null;
@@ -392,7 +393,7 @@ export class BrowserSearch {
         this.rootVisits=this.root.visits;
       }
     }else{
-      while(this.rootVisits<target&&now()<deadline&&!stopped()){
+      while(this.rootVisits<target&&(this.rootVisits===initialRootVisits||now()<deadline)&&!stopped()){
         if(this._earlyStop&&this.shouldStopEarly())break;
         const v=await this._simulate(this.root,stopped);
         if(v===null)break;

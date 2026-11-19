@@ -514,3 +514,13 @@ html[data-theme="dark"] .kingdom-board .candidate-number.gumbel{fill:#e0e7ff}
 html[data-theme="dark"] .kingdom-board .candidate-dot.gumbel.gumbel-eliminated+.candidate-number.gumbel,html[data-theme="dark"] .kingdom-board .candidate-dot.gumbel.gumbel-unconsidered+.candidate-number.gumbel{fill:#94a3b8}
 html[data-theme="dark"] .kingdom-board .candidate-dot.gumbel.proven-win{fill:#14532d;stroke:#facc15}
 html[data-theme="dark"] .kingdom-board .candidate-dot.gumbel.proven-loss{fill:#450a0a;stroke:#f87171}
+
+/* D4 Symmetry Sample Control */
+.d4-control-row{display:flex;align-items:center;gap:10px;margin-bottom:8px}
+.d4-control-row input[type="range"]{flex:1;accent-color:#346e67;cursor:pointer}
+.d4-num-box{display:inline-flex;align-items:center;border:1px solid #d4dce4;border-radius:8px;background:#fff;padding:4px 8px;gap:4px}
+.d4-num-box input{width:36px;border:none;font-size:13px;font-weight:750;text-align:right;background:transparent;color:var(--ink)}
+.d4-num-box input:focus{outline:none}
+.preset-btn.active{background:#e6f1ee;border-color:#5c9e90;color:#1e5b4f;font-weight:750}
+html[data-theme="dark"] .d4-num-box{background:#1e293b;border-color:#334155}
+html[data-theme="dark"] .preset-btn.active{background:#134e4a;border-color:#2dd4bf;color:#ccfbf1}

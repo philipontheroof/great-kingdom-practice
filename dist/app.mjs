@@ -1,11 +1,11 @@
-import {newStudy,addNode,pathTo,lineThrough,importDocument,blueEvaluation,studyForSave,resolveBranchLeaf,nextInBranch,branchLeaves,FORMAT} from './study.mjs';
-import {facts,stateGroups,territory,canonicalState,positionPayload} from './engine.mjs';
-import {boardSvg,candidateOutcome,candidateShare} from './board.mjs';
-import {STORE,persistStudy,retryAnalysis} from './client.mjs';
-import {PracticeControls,missingNodes,normalizeBudget,analysisFloor,budgetPayload,budgetReached,budgetLabel,BUDGET_RANGE,BUDGET_DEFAULT,TEMPERATURE_DEFAULT,normalizeTemperature,pickAiAction} from './controls.mjs';
-import {timelineSvg} from './timeline.mjs';
-import {LocalEngine} from './local-client.mjs';
-import {loadStaticConfig,loadStaticManifest} from './deployment.mjs?v=2';
+import {newStudy,addNode,pathTo,lineThrough,importDocument,blueEvaluation,studyForSave,resolveBranchLeaf,nextInBranch,branchLeaves,FORMAT} from './study.mjs?v=22';
+import {facts,stateGroups,territory,canonicalState,positionPayload} from './engine.mjs?v=22';
+import {boardSvg,candidateOutcome,candidateShare} from './board.mjs?v=22';
+import {STORE,persistStudy,retryAnalysis} from './client.mjs?v=22';
+import {PracticeControls,missingNodes,normalizeBudget,analysisFloor,budgetPayload,budgetReached,budgetLabel,BUDGET_RANGE,BUDGET_DEFAULT,TEMPERATURE_DEFAULT,normalizeTemperature,pickAiAction} from './controls.mjs?v=22';
+import {timelineSvg} from './timeline.mjs?v=22';
+import {LocalEngine} from './local-client.mjs?v=22';
+import {loadStaticConfig,loadStaticManifest} from './deployment.mjs?v=22';
 const staticOnly=document.documentElement?.dataset?.execution==='local';
 
 const $=id=>document.getElementById(id),controls=new PracticeControls(),shown=new Map(),SETTINGS='gk-practice-settings-v1';
@@ -170,7 +170,7 @@ async function search(node,budget,{onUpdate=()=>{},signal,force=false}={}){
  if(backend()==='host')delete payload.max_seconds;
  const inner=new AbortController(),relay=()=>inner.abort();signal?.addEventListener('abort',relay,{once:true});
  let last=null,reached=false;
- const update=r=>{last=r;onUpdate(r);if(!r.done&&budgetReached(budget,r)){reached=true;inner.abort();}};
+ const update=r=>{last=r;onUpdate(r);if(!r.done&&(r.mcts?.root_visits>0||r.source==='rule'||r.source==='tactical'||r.stop_reason)&&budgetReached(budget,r)){reached=true;inner.abort();}};
  try{return await retryAnalysis(()=>backend()==='local'?local.analyze(payload,update,{signal:inner.signal,continuous:true}):streamHost(payload,update,inner.signal),inner.signal);}
  catch(error){if(reached&&last&&!signal?.aborted)return {...last,done:true};throw error;}
  finally{signal?.removeEventListener('abort',relay);}
@@ -676,6 +676,8 @@ function renderSettings(){
  if($('search-mode-hint')){
   $('search-mode-hint').textContent=settings.searchMode==='gumbel'?'Gumbel SH: 단계별 후보 압축 · 개선 정책(%)과 결선/탈락 상태 시각화':'PUCT: 방문 비중 비례 원 크기 시각화';
  }
+ if($('d4-samples-range'))$('d4-samples-range').value=String(settings.d4Samples);
+ if($('d4-samples-value')&&document.activeElement!==$('d4-samples-value'))$('d4-samples-value').value=String(settings.d4Samples);
  const d4Tabs=$('d4-samples-tabs');
  if(d4Tabs){
   for(const btn of (d4Tabs.children||[])){
@@ -1024,7 +1026,24 @@ for(const mode of ['puct','gumbel']){
   applySearchOptionChange(()=>{settings.searchMode=mode;});
  });
 }
-// D4 Symmetry Evaluation Sample Count (1 / 2 / 4 / 8)
+// D4 Symmetry Evaluation Sample Count (1..8)
+const normalizeD4Samples=v=>{const n=Math.round(Number(v));return Number.isFinite(n)?Math.min(8,Math.max(1,n)):1;};
+$('d4-samples-range')?.addEventListener('input',e=>{
+ const n=normalizeD4Samples(e.target.value);
+ if($('d4-samples-value'))$('d4-samples-value').value=String(n);
+ if($('d4-samples-hint'))$('d4-samples-hint').textContent=n===1?'표준 1방향만 추론 (완전 대칭 판은 자동 8방향 평균)':n===8?'가능한 모든 대칭 방향을 전부 추론해 평균냅니다':`가능한 대칭 방향 중 최대 ${n}개(랜덤)를 추론해 평균냅니다`;
+});
+$('d4-samples-range')?.addEventListener('change',e=>{
+ const n=normalizeD4Samples(e.target.value);
+ if(settings.d4Samples===n)return;
+ applySearchOptionChange(()=>{settings.d4Samples=n;});
+});
+$('d4-samples-value')?.addEventListener('change',e=>{
+ const n=normalizeD4Samples(e.target.value);
+ e.target.value=String(n);
+ if(settings.d4Samples===n){renderSettings();return;}
+ applySearchOptionChange(()=>{settings.d4Samples=n;});
+});
 for(const n of [1,2,4,8]){
  $(`d4-samples-${n}`)?.addEventListener('click',()=>{
   if(settings.d4Samples===n)return;

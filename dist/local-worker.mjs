@@ -1,6 +1,6 @@
-import {RULESET,features,positionPayload,replayPosition,canonicalState,sampleD4Orientations,averageD4Evaluations,inverseTransformEvaluation} from './engine.mjs';
-import {BrowserSearch} from './browser-search.mjs';
-import {decodeNetworkHeads} from './local-client.mjs';
+import {RULESET,features,positionPayload,replayPosition,canonicalState,sampleD4Orientations,averageD4Evaluations,inverseTransformEvaluation} from './engine.mjs?v=22';
+import {BrowserSearch} from './browser-search.mjs?v=22';
+import {decodeNetworkHeads} from './local-client.mjs?v=22';
 
 let ort=null,session=null,manifest=null,backend=null,generation=0,modelCacheSource='network',rawCacheHits=0,rawCacheMisses=0;
 const rawCache=new Map(),treeCache=new Map(),MAX_RAW_CACHE=1024,MAX_TREE_CACHE=24;
@@ -154,7 +154,7 @@ async function analyze(id,payload,options,runGeneration){
   }
   const initialVisits=search.rootVisits;
   const searchStartedAt=performance.now();
-  const deadline=searchStartedAt+seconds*1000,continuousDeadline=maxSeconds===null?Infinity:streamStartedAt+maxSeconds*1000;let snapshot,lastUpdateAt=null;
+  const deadline=searchStartedAt+seconds*1000,continuousDeadline=maxSeconds===null?Infinity:searchStartedAt+maxSeconds*1000;let snapshot,lastUpdateAt=null;
   const currentVps=()=>{
     const elapsedSec=(performance.now()-searchStartedAt)/1000;
     const newVisits=search.rootVisits-initialVisits;
@@ -163,10 +163,11 @@ async function analyze(id,payload,options,runGeneration){
   const totalBudget=continuous?maxVisits:visits;
   const gumbelBudget=(!continuous||payload.max_visits!==undefined)?totalBudget:null;
   const earlyStop=totalBudget>=32;
+  const chunkSize=d4Samples>1?1:8;
   do{
     if(runGeneration!==generation)throw new DOMException('Analysis cancelled','AbortError');
     const remaining=maxVisits-search.rootVisits;
-    const stepVisits=continuous?Math.max(0,Math.min(8,remaining)):Math.max(0,Math.min(8,visits-search.rootVisits));
+    const stepVisits=continuous?Math.max(0,Math.min(chunkSize,remaining)):Math.max(0,Math.min(chunkSize,visits-search.rootVisits));
     snapshot=await search.advance(stepVisits,{deadline:continuous?continuousDeadline:deadline,stopped:()=>runGeneration!==generation,earlyStop,gumbelBudget});
     const earlyDone=earlyStop&&search.shouldStopEarly();
     const done=earlyDone||(!continuous?(snapshot.mcts.root_visits>=visits||performance.now()>=deadline):(snapshot.mcts.root_visits>=maxVisits||performance.now()>=continuousDeadline));
