@@ -51,7 +51,7 @@ export function boardSvg(position,{actions=[],lastAction=null,analysis=null,show
   });
   const lastCell=(lastAction===null||lastAction===81)?null:(lastAction>=400?null:(lastAction>=100?(lastAction%100):lastAction));
   const isGumbel=analysis?.search_mode==='gumbel';
-  const allVisited=(analysis?.mcts?.candidates||[]).filter(c=>c.visits>0||(isGumbel&&(c.improved_policy??0)>=0.01));
+  const allVisited=(analysis?.mcts?.candidates||[]).filter(c=>c.visits>0);
   const nonPassVisited=allVisited.filter(c=>c.action!==81);
   const candidates=nonPassVisited.slice(0,8);
   if(nonPassVisited.length>8&&nonPassVisited[7]?.orbit_size>1){

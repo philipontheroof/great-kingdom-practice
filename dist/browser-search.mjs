@@ -1,4 +1,4 @@
-import {canonicalState,facts,moveOrbits,playAction,positionPayload,stateStabilizer} from './engine.mjs?v=24';
+import {canonicalState,facts,moveOrbits,playAction,positionPayload,stateStabilizer} from './engine.mjs?v=25';
 const now=()=>globalThis.performance?.now?.()??Date.now();
 const opponent=p=>p==='first'?'second':'first';
 const winnerValue=(state,winner)=>state.side_to_move===winner?1:-1;

@@ -1,11 +1,11 @@
-import {newStudy,addNode,pathTo,lineThrough,importDocument,blueEvaluation,studyForSave,resolveBranchLeaf,nextInBranch,branchLeaves,cloneStudyAsLeaf,FORMAT} from './study.mjs?v=24';
-import {facts,stateGroups,territory,canonicalState,positionPayload} from './engine.mjs?v=24';
-import {boardSvg,candidateOutcome,candidateShare} from './board.mjs?v=24';
-import {STORE,persistStudy,retryAnalysis} from './client.mjs?v=24';
-import {PracticeControls,missingNodes,normalizeBudget,analysisFloor,budgetPayload,budgetReached,budgetLabel,BUDGET_RANGE,BUDGET_DEFAULT,TEMPERATURE_DEFAULT,normalizeTemperature,pickAiAction} from './controls.mjs?v=24';
-import {timelineSvg} from './timeline.mjs?v=24';
-import {LocalEngine} from './local-client.mjs?v=24';
-import {loadStaticConfig,loadStaticManifest} from './deployment.mjs?v=24';
+import {newStudy,addNode,pathTo,lineThrough,importDocument,blueEvaluation,studyForSave,resolveBranchLeaf,nextInBranch,branchLeaves,FORMAT} from './study.mjs?v=25';
+import {facts,stateGroups,territory,canonicalState,positionPayload} from './engine.mjs?v=25';
+import {boardSvg,candidateOutcome,candidateShare} from './board.mjs?v=25';
+import {STORE,persistStudy,retryAnalysis} from './client.mjs?v=25';
+import {PracticeControls,missingNodes,normalizeBudget,analysisFloor,budgetPayload,budgetReached,budgetLabel,BUDGET_RANGE,BUDGET_DEFAULT,TEMPERATURE_DEFAULT,normalizeTemperature,pickAiAction} from './controls.mjs?v=25';
+import {timelineSvg} from './timeline.mjs?v=25';
+import {LocalEngine} from './local-client.mjs?v=25';
+import {loadStaticConfig,loadStaticManifest} from './deployment.mjs?v=25';
 const staticOnly=document.documentElement?.dataset?.execution==='local';
 
 const $=id=>document.getElementById(id),controls=new PracticeControls(),shown=new Map(),SETTINGS='gk-practice-settings-v1';
@@ -32,8 +32,9 @@ const settings={
  territory:true,numbers:true,
  batch:{scope:'branch',target:'missing',budget:{unit:'seconds',value:1.0}},
 };
-let lastPaint=0,doc=null,config=null,analyzing=false,analysisKind=null,moving=false,analysisController=null,preview=null,graphMode='win',saveTimer=null,local=null,localModel=null,lastRuntimeStats=null,batching=false,backendReady=true,onceNode=null,placeMode='alternate',reading=null;
+let lastPaint=0,doc=null,config=null,analyzing=false,analysisKind=null,moving=false,analysisController=null,preview=null,graphMode='win',saveTimer=null,local=null,localModel=null,lastRuntimeStats=null,batching=false,backendReady=true,onceNode=null,placeMode='alternate',reading=null,forceAiUntilLeaf=false;
 const isLeafNode=(d,id)=>!d?.nodes?.some?.(n=>n.parent===id);
+function syncForcePinForNode(n=active()){if(forceAiUntilLeaf&&n&&isLeafNode(doc,n.id))forceAiUntilLeaf=false;}
 const isReading=()=>Boolean(reading);
 const currentDoc=()=>reading?reading.doc:doc;
 const analysisKey=n=>{
@@ -81,7 +82,7 @@ function applyPinsOnNavigation(){
  if(!settings.pins.numbers)settings.numbers=false;
 }
 const canAiPlay=()=>!isReading()&&placeMode==='alternate';
-const currentAiTurn=(n=active())=>Boolean(n&&!n.position?.result&&canAiPlay()&&isLeafNode(doc,n.id)&&controls.aiTurn(n.position));
+const currentAiTurn=(n=active())=>Boolean(n&&!n.position?.result&&canAiPlay()&&(isLeafNode(doc,n.id)||forceAiUntilLeaf)&&controls.aiTurn(n.position));
 const active=()=>{const d=currentDoc();return d?.nodes.find(n=>n.id===d.selected);};
 const anchorNode=()=>doc?.nodes.find(n=>n.id===(reading?.anchorId??doc?.selected));
 const backend=()=>$('backend')?.value||(staticOnly?'local':'host');
@@ -189,7 +190,7 @@ function acceptResult(result,node,model,execution){
 function setPlaceMode(mode){
  placeMode=mode;
  if(mode!=='alternate'){
-  cancel();controls.playing=false;
+  cancel();controls.playing=false;forceAiUntilLeaf=false;
   notice(mode==='place-red'?'🔴 빨간 성 배치: 판을 클릭하면 빨간 성이 놓여집니다.':mode==='place-blue'?'🔵 파란 성 배치: 판을 클릭하면 파란 성이 놓여집니다.':mode==='place-neutral'?'⚪ 중립 성 배치: 판을 클릭하면 중립 성이 놓여집니다.':'🗑️ 성 제거: 판의 성을 클릭하면 제거됩니다.');
  }else{
   if(!isReading()&&controls.anyAI())controls.playing=true;
@@ -201,7 +202,7 @@ function setPlaceMode(mode){
 function enterReadingMode(){
  if(!doc||isReading())return;
  const node=active();if(!node?.position)return;
- cancel();controls.playing=false;preview=null;
+ cancel();controls.playing=false;forceAiUntilLeaf=false;preview=null;
  clearReadingShown();
  const rootAnalysis=nodeAnalysis(node);
  reading={
@@ -344,7 +345,7 @@ async function setTurnSide(side){
  if(!isReading()&&placeMode==='alternate')schedule();
 }
 
-async function startAnalysis({ai=false,kind=ai?'ai':'once',force=false}={}){
+async function startAnalysis({ai=false,kind=ai?'ai':'once',force=false,forceNonLeaf=false,forceMove=false}={}){
  if(!active()||moving||batching||!modelAvailable()||(ai&&!canAiPlay()))return;
  cancel();const node=active(),nodeKey=analysisKey(node),readingRef=reading,study=doc,model=doc.model_id,execution=backend(),token=controls.begin(nodeKey,model,execution),controller=new AbortController();analysisController=controller;analyzing=true;analysisKind=kind;
  if(force){node.analysis=null;shown.delete(nodeKey);}
@@ -357,15 +358,19 @@ async function startAnalysis({ai=false,kind=ai?'ai':'once',force=false}={}){
  }catch(error){if(error.name!=='AbortError'&&valid()&&!ponder)notice(error.message,true);return;}
  finally{analyzing=false;analysisKind=null;analysisController=null;if(valid()){if(!ponder)render();else renderSettings();}}
  const aiAction=ai?pickAiAction(result,settings.playTemperature,Math.random,{ignoreProvenLoss:settings.ignoreProvenLoss,forceProvenWin:settings.forceProvenWin}):null;
- if(ai&&valid()&&isLeafNode(doc,node.id)&&controls.aiTurn(node.position)&&aiAction!==null&&aiAction!==undefined){await place(aiAction,true);}
+ const allowHere=isLeafNode(doc,node.id)||forceNonLeaf||forceAiUntilLeaf;
+ const turnAllowed=forceMove||controls.aiTurn(node.position);
+ if(ai&&valid()&&allowHere&&turnAllowed&&aiAction!==null&&aiAction!==undefined){await place(aiAction,true);}
 }
 function schedule(){
  if(isReading())return;
- const n=active();if(!n)return;if(n.position.result){render();return;}
+ const n=active();if(!n)return;
+ syncForcePinForNode(n);
+ if(n.position.result){render();return;}
  if(!canAiPlay())return;
  const isLeaf=isLeafNode(doc,n.id);
- if(isLeaf&&controls.aiTurn(n.position)){
-  queueMicrotask(()=>run(()=>startAnalysis({ai:true})));
+ if((isLeaf||forceAiUntilLeaf)&&controls.aiTurn(n.position)){
+  queueMicrotask(()=>run(()=>startAnalysis({ai:true,forceNonLeaf:!isLeaf&&forceAiUntilLeaf})));
  }else if(settings.analysisPinned){
   queueMicrotask(()=>run(()=>startAnalysis({kind:'pinned'})));
  }else if(controls.continuous[n.position.side_to_move]&&!budgetReached(settings.analysisLimit,nodeAnalysis(n))){
@@ -382,6 +387,7 @@ async function selectNode(id){
  if(onceNode!==id)onceNode=null;
  doc.selected=id;
  doc.branch_leaf=resolveBranchLeaf(doc,id,doc.branch_leaf);
+ syncForcePinForNode(active());
  save();
  render();
  schedule();
@@ -404,7 +410,7 @@ async function place(action,fromAI=false){
   if(study!==doc||reading!==readingRef||token!==controls.epoch)return;
   applyPinsOnNavigation();
   addNode(targetDoc,node.id,action,next);targetDoc.branch_leaf=resolveBranchLeaf(targetDoc,targetDoc.selected,targetDoc.branch_leaf);onceNode=null;
-  if(!readingRef)save();
+  if(!readingRef){syncForcePinForNode(active());save();}
   notice('');
  }finally{moving=false;if(token===controls.epoch)render();}
  if(!readingRef&&token===controls.epoch&&placeMode==='alternate')schedule();
@@ -473,8 +479,14 @@ function renderBoard(){
   }
   boardEl.setAttribute('aria-busy',String(moving));
  }
- if($('blue-score'))$('blue-score').innerHTML=`${p.score.blue}<small>영토</small>`;
- if($('red-score'))$('red-score').innerHTML=`${p.score.red}<small>영토</small>`;
+ const blueRaw=Number(p.score?.blue??0),redRaw=Number(p.score?.red??0),komiVal=Number(p.komi??doc?.setup?.komi??2.5);
+ const redEff=redRaw+komiVal;
+ const fmtScore=n=>{const v=Math.round(n*100)/100;return Object.is(v,-0)?'0':String(v);};
+ const blueWinning=blueRaw>redEff,redWinning=redEff>blueRaw;
+ if($('blue-score')){$('blue-score').textContent=fmtScore(blueRaw);$('blue-score').classList?.toggle?.('winning',blueWinning);}
+ if($('red-score')){$('red-score').textContent=fmtScore(redEff);$('red-score').classList?.toggle?.('winning',redWinning);}
+ if($('red-score-wrap'))$('red-score-wrap').classList?.toggle?.('winning',redWinning);
+ if($('red-score-detail'))$('red-score-detail').textContent=`= ${fmtScore(redRaw)} ${komiVal>=0?'+':'-'} ${fmtScore(Math.abs(komiVal))}`;
  if($('blue-player'))$('blue-player').textContent=controls.aiSide.first?'AI':'사람';
  if($('red-player'))$('red-player').textContent=controls.aiSide.second?'AI':'사람';
  if($('turn-dot'))$('turn-dot').className=`turn-dot ${p.side_to_move==='first'?'blue':'red'}`;
@@ -483,11 +495,10 @@ function renderBoard(){
  if($('nav-label'))$('nav-label').textContent=`${node.ply}수`;
  if($('first'))$('first').disabled=$('previous').disabled=onReading||node.parent===null;
  if($('next'))$('next').disabled=$('last').disabled=onReading||!nextInBranch(doc,node.id,doc.branch_leaf);
- const passCand=(L.policy&&visible&&!preview)?(visible.mcts?.candidates||[]).find(c=>c.action===81&&(c.visits>0||(visible.search_mode==='gumbel'&&(c.improved_policy??0)>=0.01))):null;
+ const passCand=(L.policy&&visible&&!preview)?(visible.mcts?.candidates||[]).find(c=>c.action===81&&c.visits>0):null;
  const passOut=passCand?candidateOutcome(passCand,visible):null;
  const passShare=passCand?candidateShare(passCand,visible):0;
  if($('pass')){$('pass').disabled=Boolean(p.result||preview||moving||(!onReading&&controls.aiTurn(p))||(backend()==='local'&&!local)||placeMode!=='alternate');$('pass').textContent=passCand?`패스 (${passOut==='win'?'필승 · ':passOut==='loss'?'필패 · ':''}${(passShare*100).toFixed(1)}%)`:'패스';}
- if($('clone-leaf-button'))$('clone-leaf-button').disabled=Boolean(onReading||moving||batching||!node);
  if($('preview-exit'))$('preview-exit').hidden=!preview;
  if($('preview-label'))$('preview-label').hidden=!(settings.layers.ownership&&visible);
 
@@ -576,8 +587,10 @@ function renderAnalysis(){
   const expectedText=candidate.expected_score===null?'—':`${signed(candidate.expected_score)}집`;
   return `<div class="candidate-hist-wrap"><div class="candidate-hist-meta"><span>MCTS 경로 예상 집차이 분포 (x: 집차이 · y: 확률)</span><span>평균 ${expectedText}</span></div><svg class="candidate-hist-svg" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" role="img" aria-label="후보수 예상 집차이 분포">${zeroLine}${bars}<line x1="0" y1="${h-2}" x2="${w}" y2="${h-2}" stroke="#cbd5e1" stroke-width="0.6"/></svg></div>`;
  }
- const candidates=analysis?.mcts.candidates.slice(0,8)||[];
- if($('candidate-count'))$('candidate-count').textContent=candidates.length?`${analysis.mcts.candidates.length}개 후보`:'상위 후보';
+ const rawCandidates=analysis?.mcts?.candidates||[];
+ const visitedCandidates=rawCandidates.filter(c=>c.visits>0);
+ const candidates=(visitedCandidates.length?visitedCandidates:rawCandidates).slice(0,8);
+ if($('candidate-count'))$('candidate-count').textContent=candidates.length?`${visitedCandidates.length||rawCandidates.length}개 후보`:'상위 후보';
  if($('candidates')){
   $('candidates').replaceChildren();
   if(!candidates.length){const p=document.createElement('p');p.className='empty-state';p.textContent='이 국면의 후보수가 없어요.';$('candidates').append(p);}
@@ -776,10 +789,26 @@ function renderSettings(){
  setSwitch('play-ponder',settings.ponder);
  if($('ponder-hint'))$('ponder-hint').textContent=settings.ponder?'무제한(♾️) 자동 분석 연동 중 · 내 차례에도 계속 탐색합니다.':'켜면 분석 제한이 무제한(♾️)으로 설정되어 내 차례에도 계속 자동 분석합니다.';
  const isLeaf=isLeafNode(doc,node?.id);
+ syncForcePinForNode(node);
  const who=SIDES.filter(s=>controls.aiSide[s]).map(sideName).join('·');
  const pondering=analyzing&&analysisKind==='ponder';
- if($('play-status'))$('play-status').textContent=placeMode!=='alternate'?'성 배치 모드 · AI 착수 대기':!who?'AI 착수 꺼짐 · 양쪽을 직접 둡니다':isLeaf?(pondering?`AI가 ${who}을(를) 둡니다 · 미리 탐색 중…`:`AI가 ${who}을(를) 둡니다`):`AI ${who} 대기 중 · 과거 수 탐색 중`;
- if($('play-clone-leaf'))$('play-clone-leaf').hidden=Boolean(isReading()||!node||node.position?.result||isLeaf);
+ if($('play-status'))$('play-status').textContent=placeMode!=='alternate'?'성 배치 모드 · AI 착수 대기':!who?'AI 착수 꺼짐 · 양쪽을 직접 둡니다':isLeaf?(pondering?`AI가 ${who}을(를) 둡니다 · 미리 탐색 중…`:`AI가 ${who}을(를) 둡니다`):forceAiUntilLeaf?`AI ${who} 강제 착수 중 · 리프까지 고정`:`AI ${who} 대기 중 · 과거 수 탐색 중`;
+ const nonLeafPlayable=Boolean(node&&!isReading()&&!node.position?.result&&placeMode==='alternate'&&!isLeaf);
+ if($('ai-force-once'))$('ai-force-once').disabled=Boolean(!nonLeafPlayable||moving||batching||!modelAvailable());
+ const forcePin=$('ai-force-until-leaf');
+ if(forcePin){
+  forcePin.checked=Boolean(forceAiUntilLeaf);
+  forcePin.disabled=Boolean(!nonLeafPlayable||!controls.anyAI());
+ }
+ if($('ai-force-hint')){
+  $('ai-force-hint').textContent=isLeaf
+   ?'현재 리프(끝) 국면이에요 · 일반 AI 착수가 적용됩니다.'
+   :!controls.anyAI()
+    ?'중간 수에서는 1회 강제 착수를 누르거나, 파랑/빨강 AI를 켜면 [리프까지 고정]을 쓸 수 있어요.'
+    :forceAiUntilLeaf
+     ?'고정 켜짐 · 처음 리프에 도달할 때까지 중간 수에서도 계속 착수합니다.'
+     :'중간 수에서 강제 착수해 다르면 새 가지로 분기합니다. 고정은 첫 리프 도달 시 풀립니다.';
+ }
 
  // 2. 일반 시각화
  setSwitch('territory-toggle',settings.territory);setSwitch('numbers-toggle',settings.numbers);
@@ -916,8 +945,8 @@ async function rebuildStudy(imported){
  }
  return {...imported,nodes};
 }
-async function loadStudy(value,{initializeModel=true,preserveCurrent=true}={}){const imported=importDocument(value);clearTimeout(saveTimer);if(preserveCurrent&&!saveNow())throw Error('현재 기보를 내보내기로 보관해 주세요.');cancel();controls.playing=false;const epoch=controls.epoch,rebuilt=await rebuildStudy(imported);if(epoch!==controls.epoch)return;reading=null;clearReadingShown();doc={...rebuilt,storage_id:value.storage_id||crypto.randomUUID()};doc.branch_leaf=resolveBranchLeaf(doc,doc.selected,doc.branch_leaf);placeMode='alternate';onceNode=null;shown.clear();populateModels();render();save();if(initializeModel&&backend()==='local'&&localModel!==doc.model_id)await setupBackend();else if(initializeModel)schedule();}
-async function createGame(setup,{keepPlaceMode=false}={}){cancel();controls.playing=false;const epoch=controls.epoch,p=await position({ruleset_version:doc?.ruleset_version||'gk-v2.2',setup,actions:[]});if(epoch!==controls.epoch)return;clearTimeout(saveTimer);if(!saveNow())throw Error('현재 기보를 먼저 보관해 주세요.');const model=doc?.model_id||config?.models?.[0]?.id||null;reading=null;clearReadingShown();doc={...newStudy(setup,p),storage_id:crypto.randomUUID(),model_id:model};doc.branch_leaf=resolveBranchLeaf(doc,doc.selected,doc.branch_leaf);doc.title=`${new Date().toLocaleDateString('ko-KR',{month:'long',day:'numeric'})}의 연습`;if(!keepPlaceMode)placeMode='alternate';onceNode=null;shown.clear();if(placeMode==='alternate'&&controls.anyAI())controls.playing=true;populateModels();save();render();if($('new-dialog'))$('new-dialog').close();if(placeMode==='alternate')schedule();}
+async function loadStudy(value,{initializeModel=true,preserveCurrent=true}={}){const imported=importDocument(value);clearTimeout(saveTimer);if(preserveCurrent&&!saveNow())throw Error('현재 기보를 내보내기로 보관해 주세요.');cancel();controls.playing=false;forceAiUntilLeaf=false;const epoch=controls.epoch,rebuilt=await rebuildStudy(imported);if(epoch!==controls.epoch)return;reading=null;clearReadingShown();doc={...rebuilt,storage_id:value.storage_id||crypto.randomUUID()};doc.branch_leaf=resolveBranchLeaf(doc,doc.selected,doc.branch_leaf);placeMode='alternate';onceNode=null;shown.clear();populateModels();render();save();if(initializeModel&&backend()==='local'&&localModel!==doc.model_id)await setupBackend();else if(initializeModel)schedule();}
+async function createGame(setup,{keepPlaceMode=false}={}){cancel();controls.playing=false;forceAiUntilLeaf=false;const epoch=controls.epoch,p=await position({ruleset_version:doc?.ruleset_version||'gk-v2.2',setup,actions:[]});if(epoch!==controls.epoch)return;clearTimeout(saveTimer);if(!saveNow())throw Error('현재 기보를 먼저 보관해 주세요.');const model=doc?.model_id||config?.models?.[0]?.id||null;reading=null;clearReadingShown();doc={...newStudy(setup,p),storage_id:crypto.randomUUID(),model_id:model};doc.branch_leaf=resolveBranchLeaf(doc,doc.selected,doc.branch_leaf);doc.title=`${new Date().toLocaleDateString('ko-KR',{month:'long',day:'numeric'})}의 연습`;if(!keepPlaceMode)placeMode='alternate';onceNode=null;shown.clear();if(placeMode==='alternate'&&controls.anyAI())controls.playing=true;populateModels();save();render();if($('new-dialog'))$('new-dialog').close();if(placeMode==='alternate')schedule();}
 function showNew(){if(!$('recent-studies'))return;$('recent-studies').replaceChildren();for(const entry of library()){const b=document.createElement('button');b.type='button';b.textContent=`${entry.title||'이름 없는 연습'} · ${entry.nodes.length}개 국면`;b.addEventListener('click',()=>run(async()=>{await loadStudy(entry);$('new-dialog').close();}));$('recent-studies').append(b);}$('new-dialog').showModal();}
 async function batch(){if(batching){cancel();render();return;}if(!modelAvailable())return;
  cancel();controls.playing=false;
@@ -930,23 +959,6 @@ async function batch(){if(batching){cancel();render();return;}if(!modelAvailable
  try{for(const n of nodes){if(controller.signal.aborted||study!==doc||epoch!==controls.epoch)break;if($('batch-status'))$('batch-status').textContent=`${completed}/${nodes.length} · ${n.ply}수 계산 중`;
  const a=await search(n,budget,{signal:controller.signal});if(study!==doc||epoch!==controls.epoch)break;acceptResult(a,n,model,execution);completed++;renderTimeline();}
  }finally{if(epoch===controls.epoch){batching=false;analysisController=null;if($('batch-status'))$('batch-status').textContent=`${completed}/${nodes.length} 국면 완료`;render();schedule();}}
-}
-async function cloneLeafHere(){
- const node=active();
- if(!node||isReading()||moving||batching)return;
- cancel();
- if(!saveNow())throw Error('현재 기보를 먼저 저장하지 못했어요.');
- const storageId=globalThis.crypto?.randomUUID?.()??`s-${Date.now()}-${Math.random().toString(16).slice(2)}`;
- const cloned=cloneStudyAsLeaf(doc,node.id,storageId);
- doc=cloned;
- shown.clear();
- onceNode=null;
- placeMode='alternate';
- if(controls.anyAI())controls.playing=true;
- saveNow();
- render();
- notice(`현재 국면(${node.ply}수)까지 새 기보 리프로 복제했어요. 원본은 [새 연습]에서 다시 열 수 있어요.`);
- schedule();
 }
 function ask(title,message,ok='확인'){const d=$('confirm-dialog');if(!d)return Promise.resolve(true);if($('confirm-title'))$('confirm-title').textContent=title;if($('confirm-message'))$('confirm-message').textContent=message;if($('confirm-ok'))$('confirm-ok').textContent=ok;d.returnValue='';return new Promise(resolve=>{d.addEventListener('close',()=>resolve(d.returnValue==='ok'),{once:true});d.showModal();});}
 async function run(fn){try{await fn();}catch(e){if(e.name!=='AbortError')notice(e.message||'작업 실패',true);}}
@@ -962,22 +974,20 @@ $('mode-remove')?.addEventListener('click',()=>setPlaceMode(placeMode==='remove'
 $('turn-order-blue')?.addEventListener('click',()=>run(()=>setTurnSide('first')));
 $('turn-order-red')?.addEventListener('click',()=>run(()=>setTurnSide('second')));
 $('analyze-button')?.addEventListener('click',()=>{
- if(analyzing){if(analysisKind==='ai')controls.playing=false;cancel();render();return;}
+ if(analyzing){if(analysisKind==='ai'){controls.playing=false;forceAiUntilLeaf=false;}cancel();render();return;}
  const n=active();if(!n)return;
  onceNode=n.id;controls.visible=true;render();
  const aiTurn=currentAiTurn(n);
  if(aiTurn)controls.playing=true;
- run(()=>startAnalysis({ai:aiTurn,kind:aiTurn?'ai':'once'}));
+ run(()=>startAnalysis({ai:aiTurn,kind:aiTurn?'ai':'once',forceNonLeaf:aiTurn&&!isLeafNode(doc,n.id)}));
 });
 $('reanalyze-button')?.addEventListener('click',()=>{
  const n=active();if(!n||moving||batching||!modelAvailable()||n.position?.result)return;
  cancel();
  onceNode=n.id;controls.visible=true;
- const aiTurn=canAiPlay()&&isLeafNode(doc,n.id)&&controls.aiTurn(n.position);
- run(()=>startAnalysis({ai:aiTurn,kind:aiTurn?'ai':'once',force:true}));
+ const aiTurn=currentAiTurn(n);
+ run(()=>startAnalysis({ai:aiTurn,kind:aiTurn?'ai':'once',force:true,forceNonLeaf:aiTurn&&!isLeafNode(doc,n.id)}));
 });
-$('clone-leaf-button')?.addEventListener('click',()=>run(cloneLeafHere));
-$('play-clone-leaf')?.addEventListener('click',()=>run(cloneLeafHere));
 $('once-auto-show')?.addEventListener('change',e=>{settings.onceAutoShow=e.target.checked;saveSettings();render();});
 for(const s of SIDES)$(`continuous-${s}`)?.addEventListener('change',e=>{
  controls.continuous[s]=e.target.checked;if(!controls.anyContinuous())controls.visualContinuous=false;saveSettings();
@@ -1041,9 +1051,9 @@ function applySearchOptionChange(updater){
  saveSettings();
  render();
  if(cur&&!moving&&!batching&&modelAvailable()&&!cur.position?.result){
-  const aiTurn=canAiPlay()&&isLeafNode(doc,cur.id)&&controls.aiTurn(cur.position);
+  const aiTurn=currentAiTurn(cur);
   if(aiTurn||settings.analysisPinned||controls.anyContinuous()||hadAnalysis){
-   run(()=>startAnalysis({ai:aiTurn,kind:aiTurn?'ai':(settings.analysisPinned?'pinned':'once')}));
+   run(()=>startAnalysis({ai:aiTurn,kind:aiTurn?'ai':(settings.analysisPinned?'pinned':'once'),forceNonLeaf:aiTurn&&!isLeafNode(doc,cur.id)}));
   }
  }
 }
@@ -1143,6 +1153,7 @@ for(const [id,key] of [['ownership-toggle','ownership'],['layer-policy','policy'
 for(const s of SIDES){
  $(`play-${s}`)?.addEventListener('change',e=>{
    cancel();controls.aiSide[s]=e.target.checked;
+   if(!controls.anyAI())forceAiUntilLeaf=false;
    if(e.target.checked){
     controls.continuous[s]=true;
     if(settings.ponder){
@@ -1167,6 +1178,33 @@ for(const s of SIDES){
  $(`play-${s}-unit`)?.addEventListener('change',budgetChanged);$(`play-${s}-value`)?.addEventListener('change',budgetChanged);
 }
 $('ai-resume')?.addEventListener('click',()=>{cancel();render();schedule();});
+$('ai-force-once')?.addEventListener('click',()=>{
+ const n=active();
+ if(!n||isReading()||n.position?.result||placeMode!=='alternate'||isLeafNode(doc,n.id)||moving||batching||!modelAvailable())return;
+ cancel();
+ controls.playing=true;
+ controls.visible=true;
+ run(()=>startAnalysis({ai:true,kind:'ai',forceNonLeaf:true,forceMove:true}));
+});
+$('ai-force-until-leaf')?.addEventListener('change',e=>{
+ const on=Boolean(e.target.checked);
+ const n=active();
+ if(on&&(!n||isReading()||n.position?.result||placeMode!=='alternate'||isLeafNode(doc,n.id)||!controls.anyAI())){
+  forceAiUntilLeaf=false;
+  renderSettings();
+  return;
+ }
+ forceAiUntilLeaf=on;
+ if(!on){
+  if(analyzing&&analysisKind==='ai'&&n&&!isLeafNode(doc,n.id))cancel();
+  render();
+  return;
+ }
+ controls.playing=true;
+ if(analyzing&&analysisKind!=='ai')cancel();
+ render();
+ schedule();
+});
 $('play-temperature')?.addEventListener('change',()=>{settings.playTemperature=normalizeTemperature($('play-temperature').value,{fallback:TEMPERATURE_DEFAULT});saveSettings();render();});
 $('play-force-proven-win')?.addEventListener('change',e=>{settings.forceProvenWin=e.target.checked;saveSettings();render();});
 $('play-ignore-proven-loss')?.addEventListener('change',e=>{settings.ignoreProvenLoss=e.target.checked;saveSettings();render();});

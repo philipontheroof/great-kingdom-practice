@@ -1,6 +1,6 @@
 <!doctype html>
 <html data-execution="local" lang="ko">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#172e45"><title>Great Kingdom · 연습실</title><link rel="icon" href="data:,"><link rel="stylesheet" href="./style.css?v=24"><script type="module" src="./app.mjs?v=24"></script></head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#172e45"><title>Great Kingdom · 연습실</title><link rel="icon" href="data:,"><link rel="stylesheet" href="./style.css?v=25"><script type="module" src="./app.mjs?v=25"></script></head>
 <body>
   <main>
     <header class="study-toolbar">
@@ -34,15 +34,20 @@
             <div class="game-condition"><span id="setup-label">중립 성 중앙</span><span>·</span><span id="komi-label">덤 2.5</span></div>
           </div>
           <div class="players">
-            <div class="player">
+            <div class="player blue-side-info">
               <span class="castle-mini blue"></span>
-              <div class="player-info"><span id="blue-player">나</span><small>파란 성 · 선공</small></div>
-              <strong id="blue-score">0<small>영토</small></strong>
+              <div class="player-info"><span id="blue-player">사람</span><small>파란 성 · 선공</small></div>
             </div>
-            <span class="versus">vs</span>
-            <div class="player red-side">
-              <strong id="red-score">0<small>영토</small></strong>
-              <div class="player-info"><span id="red-player">Champion</span><small>빨간 성 · 후공</small></div>
+            <div class="score-center" aria-label="영토 점수 비교 (덤 포함)">
+              <strong id="blue-score" class="score-num score-blue">0</strong>
+              <span class="versus">vs</span>
+              <span id="red-score-wrap" class="red-score-wrap">
+                <strong id="red-score" class="score-num score-red">2.5</strong>
+                <span id="red-score-detail" class="score-breakdown">= 0 + 2.5</span>
+              </span>
+            </div>
+            <div class="player red-side-info">
+              <div class="player-info"><span id="red-player">AI</span><small>빨간 성 · 후공</small></div>
               <span class="castle-mini red"></span>
             </div>
           </div>
@@ -121,7 +126,6 @@
             <button id="next" class="icon-button" aria-label="다음 수">→</button>
             <button id="last" class="icon-button" aria-label="마지막 수">⇥</button>
             <div class="nav-spacer"></div>
-            <button id="clone-leaf-button" type="button" class="quiet-button" title="현재 수까지 복제한 새 기보를 만들어 이 자리를 리프(끝)로 시작합니다">이 자리 리프 복제</button>
             <button id="pass" class="quiet-button">패스</button>
           </div>
           <div class="board-legend">
@@ -470,9 +474,18 @@
               <label class="switch-row nested"><input id="play-force-proven-win" type="checkbox" role="switch" checked><span>필승수 발견 시 강제 선택</span></label>
               <label class="switch-row nested"><input id="play-ignore-proven-loss" type="checkbox" role="switch" checked><span>Temp 적용 시 필패수 제외</span></label>
             </div>
+            <div class="play-row">
+              <div class="play-force-row">
+                <button id="ai-force-once" type="button" class="quiet-button" title="리프가 아닌 중간 노드에서도 현재 차례를 AI 탐색으로 강제 착수합니다. 기존 수와 다르면 새 가지로 분기합니다.">이 수 강제 착수 (1회)</button>
+                <label class="pin-toggle" title="켜면 리프에 처음 도달할 때까지 중간 노드에서도 AI가 계속 강제 착수하고, 첫 리프에 도달하면 고정이 자동 해제됩니다.">
+                  <input id="ai-force-until-leaf" type="checkbox" role="switch">
+                  <span class="pin-label">리프까지 고정</span>
+                </label>
+              </div>
+              <span id="ai-force-hint" class="hint">중간 수에서 강제 착수해 다르면 새 가지로 분기합니다. 고정은 첫 리프 도달 시 풀립니다.</span>
+            </div>
             <div class="play-status">
               <span id="play-status" class="hint">AI 착수 꺼짐 · 양쪽을 직접 둡니다</span>
-              <button id="play-clone-leaf" type="button" class="text-button" hidden>이 자리 리프 복제 ↗</button>
               <button id="ai-resume" class="text-button" hidden>AI 착수 재개</button>
             </div>
             <label class="switch-row" style="margin-top:8px"><input id="play-ponder" type="checkbox" role="switch" checked><span>내 차례에도 AI 미리 탐색 (Pondering)</span></label>
