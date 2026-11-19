@@ -97,10 +97,12 @@ export class BrowserSearch {
       }
       if(node.edges.some(e=>e.child?.provenWinner===turn)){
         node.provenWinner=turn;
-      }else if(node.fullyExplored){
+        if(node!==this.root)node.fullyExplored=true;
+      }else{
         const winners=node.edges.map(e=>e.child?.provenWinner??null);
         if(winners.every(w=>w!==null&&w!==turn)){
           node.provenWinner=winners[0];
+          if(node!==this.root)node.fullyExplored=true;
         }
       }
     }
@@ -146,6 +148,9 @@ export class BrowserSearch {
   static fromNode(node,evaluateAsync,{cPuct=1.5}={}){
     if(node.state.result===null&&node.expanded&&(!node.edges||!node.edges.length)){
       node.expanded=false;
+      node.fullyExplored=false;
+    }
+    if(node.edges?.length&&!node.edges.every(e=>e.child?.fullyExplored)){
       node.fullyExplored=false;
     }
     const search=new BrowserSearch(node.state,evaluateAsync,{cPuct});
