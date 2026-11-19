@@ -125,3 +125,56 @@ export function inverseTransformEvaluation(raw,sym){
   }
   return {...raw,policy82,ownership,territory_probabilities};
 }
+export function sampleD4Orientations(state,maxSamples=1,rng=Math.random){
+  const {state:canon,sym:toCanon,stabilizer}=canonicalD4State(state);
+  const byBoard=new Map();
+  for(let sym=0;sym<8;sym++){
+    const ts=transformState(canon,sym),bkey=ts.board.join('');
+    let g=byBoard.get(bkey);
+    if(!g){g={boardState:ts,syms:[]};byBoard.set(bkey,g);}
+    g.syms.push(sym);
+  }
+  const groups=[...byBoard.values()];
+  const limit=Math.max(1,Math.min(8,Math.trunc(Number(maxSamples))||1));
+  const k=Math.min(limit,groups.length);
+  let chosen;
+  if(k===groups.length){
+    chosen=groups;
+  }else if(k===1){
+    chosen=[groups[0]];
+  }else{
+    const pool=groups.slice();
+    for(let i=0;i<k;i++){
+      const j=i+Math.floor(rng()*(pool.length-i));
+      const tmp=pool[i];pool[i]=pool[j];pool[j]=tmp;
+    }
+    chosen=pool.slice(0,k);
+  }
+  return {canon,toCanon,stabilizer,totalDistinct:groups.length,chosenGroups:chosen};
+}
+export function averageD4Evaluations(groupEvals){
+  const expanded=[];
+  for(const {eval:raw,syms} of groupEvals){
+    for(const sym of syms)expanded.push(inverseTransformEvaluation(raw,sym));
+  }
+  const count=expanded.length;
+  const first=expanded[0];
+  const policy82=Array(82).fill(0);
+  let value=0,winProb=0,expScore=0;
+  const hasOwnership=Array.isArray(first.ownership)&&first.ownership.length===3*AREA;
+  const hasTerr=Array.isArray(first.territory_probabilities)&&first.territory_probabilities.length===AREA;
+  const hasScoreDist=Array.isArray(first.score_distribution)&&first.score_distribution.length>0;
+  const ownership=hasOwnership?Array(3*AREA).fill(0):first.ownership;
+  const terr=hasTerr?Array.from({length:AREA},()=>[0,0,0]):first.territory_probabilities;
+  const scoreDist=hasScoreDist?Array(first.score_distribution.length).fill(0):first.score_distribution;
+  for(const ev of expanded){
+    for(let a=0;a<82;a++)policy82[a]+=ev.policy82[a]/count;
+    value+=ev.value/count;
+    winProb+=ev.win_probability/count;
+    expScore+=ev.expected_score/count;
+    if(hasOwnership)for(let i=0;i<3*AREA;i++)ownership[i]+=ev.ownership[i]/count;
+    if(hasTerr)for(let i=0;i<AREA;i++){terr[i][0]+=ev.territory_probabilities[i][0]/count;terr[i][1]+=ev.territory_probabilities[i][1]/count;terr[i][2]+=ev.territory_probabilities[i][2]/count;}
+    if(hasScoreDist)for(let i=0;i<scoreDist.length;i++)scoreDist[i]+=ev.score_distribution[i]/count;
+  }
+  return {...first,policy82,value:Math.max(-1,Math.min(1,value)),win_probability:winProb,expected_score:expScore,score_distribution:scoreDist,ownership,territory_probabilities:terr};
+}

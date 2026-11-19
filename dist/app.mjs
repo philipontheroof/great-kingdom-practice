@@ -18,6 +18,7 @@ const STOP_REASON_LABELS={
 const settings={
  theme:'system',
  searchMode:'puct',
+ d4Samples:1,
  analysisLimit:{unit:'seconds',value:2.0},
  analysisPinned:false,
  onceAutoShow:true,
@@ -84,7 +85,7 @@ const active=()=>{const d=currentDoc();return d?.nodes.find(n=>n.id===d.selected
 const anchorNode=()=>doc?.nodes.find(n=>n.id===(reading?.anchorId??doc?.selected));
 const backend=()=>$('backend')?.value||(staticOnly?'local':'host');
 const modelAvailable=()=>backendReady&&Boolean(config?.models.some(m=>m.id===doc?.model_id))&&(backend()==='host'||localModel===doc?.model_id);
-const nodeAnalysis=n=>n?.analysis&&n.analysis.backend===backend()&&(!n.analysis.model||n.analysis.model.id===doc?.model_id)&&(n.analysis.search_mode||'puct')===settings.searchMode?n.analysis:null;
+const nodeAnalysis=n=>n?.analysis&&n.analysis.backend===backend()&&(!n.analysis.model||n.analysis.model.id===doc?.model_id)&&(n.analysis.search_mode||'puct')===settings.searchMode&&(backend()!=='local'||(n.analysis.d4_samples??1)===settings.d4Samples)?n.analysis:null;
 const displayAnalysis=n=>{
  if(!n)return null;
  const a=shown.get(analysisKey(n))||nodeAnalysis(n);
@@ -117,6 +118,7 @@ function loadSettings(){
  if(!saved||typeof saved!=='object'||Array.isArray(saved))return;
  if(['system','light','dark'].includes(saved.theme))settings.theme=saved.theme;
  if(['puct','gumbel'].includes(saved.searchMode))settings.searchMode=saved.searchMode;
+ if(Number.isInteger(saved.d4Samples)&&saved.d4Samples>=1&&saved.d4Samples<=8)settings.d4Samples=saved.d4Samples;
  settings.analysisLimit=normalizeBudget(saved.analysisLimit,{allowNone:true,fallback:'seconds'});
  if(typeof saved.analysisPinned==='boolean')settings.analysisPinned=saved.analysisPinned;
  if(typeof saved.onceAutoShow==='boolean')settings.onceAutoShow=saved.onceAutoShow;
@@ -164,7 +166,7 @@ async function streamHost(payload,onUpdate,signal){
  }finally{await reader.cancel().catch(()=>{});}
 }
 async function search(node,budget,{onUpdate=()=>{},signal,force=false}={}){
- const payload={...positionRequest(node),model_id:doc.model_id,search_mode:settings.searchMode,visits:1600,seconds:budget.unit==='seconds'?budget.value:2,continuous:true,...budgetPayload(budget),...(force?{force:true}:{})};
+ const payload={...positionRequest(node),model_id:doc.model_id,search_mode:settings.searchMode,d4_samples:settings.d4Samples,visits:1600,seconds:budget.unit==='seconds'?budget.value:2,continuous:true,...budgetPayload(budget),...(force?{force:true}:{})};
  if(backend()==='host')delete payload.max_seconds;
  const inner=new AbortController(),relay=()=>inner.abort();signal?.addEventListener('abort',relay,{once:true});
  let last=null,reached=false;
@@ -609,7 +611,7 @@ function renderAnalysis(){
  if($('pv-import'))$('pv-import').disabled=!pv.length||moving;
  if(analysis){
   const model=analysis.model;
-  const text=[`출처: ${sourceLabel(analysis.source)}`,`탐색 알고리즘: ${isGumbel?'Gumbel (Sequential Halving)':'PUCT'}`,`모델 원승률: ${pct(values.rawWin)}`,`예상 영토 차이(덤 전): ${signed(values.rawScore)}`,`탐색 시간: ${(analysis.cumulative_elapsed_seconds??analysis.mcts.elapsed_seconds).toFixed(3)}초`,
+  const text=[`출처: ${sourceLabel(analysis.source)}`,`탐색 알고리즘: ${isGumbel?'Gumbel (Sequential Halving)':'PUCT'}`,`대칭 추론: ${analysis.d4_samples??1}방향 (평균)`,`모델 원승률: ${pct(values.rawWin)}`,`예상 영토 차이(덤 전): ${signed(values.rawScore)}`,`탐색 시간: ${(analysis.cumulative_elapsed_seconds??analysis.mcts.elapsed_seconds).toFixed(3)}초`,
    `모델 SHA: ${model?.sha256?.slice(0,16)||'규칙 판정'}`,`국면: ${analysis.state_id.slice(0,16)}`,`실행: ${analysis.provider||analysis.execution||analysis.backend} · 규칙 ${analysis.position.ruleset_version}`,`전술 상태: ${analysis.exact?.status||'없음'} · 위협 ${(analysis.exact?.threats||[]).map(coord).join(', ')||'없음'}`,`정책 엔트로피: ${(-(analysis.raw_network?.policy||[]).reduce((sum,p)=>sum+(p>0?p*Math.log(p):0),0)).toFixed(3)}`,
    ...(analysis.proven_winner?[`증명된 승자: ${analysis.proven_winner==='first'?'파란 성':'빨간 성'}`]:[])];
   if($('more-metrics'))$('more-metrics').replaceChildren(...text.map(t=>{const div=document.createElement('div');div.textContent=t;return div;}));
@@ -673,6 +675,17 @@ function renderSettings(){
  }
  if($('search-mode-hint')){
   $('search-mode-hint').textContent=settings.searchMode==='gumbel'?'Gumbel SH: 단계별 후보 압축 · 개선 정책(%)과 결선/탈락 상태 시각화':'PUCT: 방문 비중 비례 원 크기 시각화';
+ }
+ const d4Tabs=$('d4-samples-tabs');
+ if(d4Tabs){
+  for(const btn of (d4Tabs.children||[])){
+   const activeD4=Number(btn.dataset?.d4)===settings.d4Samples;
+   btn.classList?.toggle?.('active',activeD4);
+   btn.setAttribute?.('aria-pressed',String(activeD4));
+  }
+ }
+ if($('d4-samples-hint')){
+  $('d4-samples-hint').textContent=settings.d4Samples===1?'표준 1방향만 추론 (완전 대칭 판은 자동 8방향 평균)':settings.d4Samples===8?'가능한 모든 대칭 방향을 전부 추론해 평균냅니다':`가능한 대칭 방향 중 최대 ${settings.d4Samples}개(랜덤)를 추론해 평균냅니다`;
  }
  
  // 2.4 최대 시간 or visit
@@ -990,22 +1003,32 @@ $('analysis-pin')?.addEventListener('change',e=>{
  if(settings.analysisPinned&&!analyzing&&!moving&&!batching)schedule();
 });
 
+function applySearchOptionChange(updater){
+ const cur=active();
+ const hadAnalysis=Boolean(visibleAnalysis()||cur?.analysis);
+ cancel();
+ updater();
+ saveSettings();
+ render();
+ if(cur&&!moving&&!batching&&modelAvailable()&&!cur.position?.result){
+  const aiTurn=canAiPlay()&&isLeafNode(doc,cur.id)&&controls.aiTurn(cur.position);
+  if(aiTurn||settings.analysisPinned||controls.anyContinuous()||hadAnalysis){
+   run(()=>startAnalysis({ai:aiTurn,kind:aiTurn?'ai':(settings.analysisPinned?'pinned':'once')}));
+  }
+ }
+}
 // Search Mode Toggle (PUCT vs Gumbel)
 for(const mode of ['puct','gumbel']){
  $(`search-mode-${mode}`)?.addEventListener('click',()=>{
   if(settings.searchMode===mode)return;
-  const cur=active();
-  const hadAnalysis=Boolean(visibleAnalysis()||cur?.analysis);
-  cancel();
-  settings.searchMode=mode;
-  saveSettings();
-  render();
-  if(cur&&!moving&&!batching&&modelAvailable()&&!cur.position?.result){
-   const aiTurn=canAiPlay()&&isLeafNode(doc,cur.id)&&controls.aiTurn(cur.position);
-   if(aiTurn||settings.analysisPinned||controls.anyContinuous()||hadAnalysis){
-    run(()=>startAnalysis({ai:aiTurn,kind:aiTurn?'ai':(settings.analysisPinned?'pinned':'once')}));
-   }
-  }
+  applySearchOptionChange(()=>{settings.searchMode=mode;});
+ });
+}
+// D4 Symmetry Evaluation Sample Count (1 / 2 / 4 / 8)
+for(const n of [1,2,4,8]){
+ $(`d4-samples-${n}`)?.addEventListener('click',()=>{
+  if(settings.d4Samples===n)return;
+  applySearchOptionChange(()=>{settings.d4Samples=n;});
  });
 }
 

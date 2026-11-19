@@ -1,6 +1,6 @@
 <!doctype html>
 <html data-execution="local" lang="ko">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#172e45"><title>Great Kingdom · 연습실</title><link rel="icon" href="data:,"><link rel="stylesheet" href="./style.css?v=20"><script type="module" src="./app.mjs?v=20"></script></head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#172e45"><title>Great Kingdom · 연습실</title><link rel="icon" href="data:,"><link rel="stylesheet" href="./style.css?v=21"><script type="module" src="./app.mjs?v=21"></script></head>
 <body>
   <main>
     <header class="study-toolbar">
@@ -290,6 +290,14 @@
               <button type="button" id="search-mode-gumbel" data-mode="gumbel">Gumbel (SH)</button>
             </div>
             <small id="search-mode-hint" class="hint">PUCT: 방문 비중 비례 원 크기 · Gumbel: 단계별 후보 압축(SH) 및 개선 정책(%)</small>
+            <div class="field-label">대칭 추론 방향 수 (D4 평균)</div>
+            <div class="segmented-small" id="d4-samples-tabs" role="group" aria-label="대칭 추론 방향 수 선택">
+              <button type="button" id="d4-samples-1" data-d4="1" class="active">1방향</button>
+              <button type="button" id="d4-samples-2" data-d4="2">2방향</button>
+              <button type="button" id="d4-samples-4" data-d4="4">4방향</button>
+              <button type="button" id="d4-samples-8" data-d4="8">8방향</button>
+            </div>
+            <small id="d4-samples-hint" class="hint">표준 1방향만 추론 (대칭 판은 자동 8방향 평균)</small>
             <div class="field-label">최대 시간 or visit</div>
             <div class="segmented-small" id="analysis-limit-tabs">
               <button type="button" data-unit="seconds" class="active">⏱ 시간(초)</button>

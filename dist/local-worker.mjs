@@ -1,4 +1,4 @@
-import {RULESET,features,positionPayload,replayPosition,canonicalState,canonicalD4State,inverseTransformEvaluation,transformState} from './engine.mjs';
+import {RULESET,features,positionPayload,replayPosition,canonicalState,sampleD4Orientations,averageD4Evaluations,inverseTransformEvaluation} from './engine.mjs';
 import {BrowserSearch} from './browser-search.mjs';
 import {decodeNetworkHeads} from './local-client.mjs';
 
@@ -6,43 +6,17 @@ let ort=null,session=null,manifest=null,backend=null,generation=0,modelCacheSour
 const rawCache=new Map(),treeCache=new Map(),MAX_RAW_CACHE=1024,MAX_TREE_CACHE=24;
 function lruGet(map,key){if(!map.has(key))return undefined;const val=map.get(key);map.delete(key);map.set(key,val);return val;}
 function lruSet(map,key,val,max){if(map.has(key))map.delete(key);map.set(key,val);while(map.size>max)map.delete(map.keys().next().value);}
-async function cachedInfer(state,{force=false}={}){
-  const {state:canon,sym:toCanon,stabilizer}=canonicalD4State(state);
-  const key=`${manifest.model_id}:d4:${canonicalState(canon)}`;
+async function cachedInfer(state,{d4Samples=1,force=false}={}){
+  const {canon,toCanon,chosenGroups}=sampleD4Orientations(state,d4Samples);
+  const key=`${manifest.model_id}:d4:${d4Samples}:${canonicalState(canon)}`;
   if(force)rawCache.delete(key);
   let canonEval=lruGet(rawCache,key);
   if(canonEval){
     rawCacheHits++;
   }else{
     rawCacheMisses++;
-    if(stabilizer.length>1){
-      const byBoard=new Map();
-      const syms=[];
-      for(let sym=0;sym<8;sym++){
-        const ts=transformState(canon,sym),bkey=ts.board.join('');
-        let p=byBoard.get(bkey);
-        if(!p){p=infer(ts);byBoard.set(bkey,p);}
-        syms.push({sym,promise:p});
-      }
-      const evals=await Promise.all(syms.map(async x=>inverseTransformEvaluation(await x.promise,x.sym)));
-      const policy82=Array(82).fill(0),first=evals[0];
-      let value=0,winProb=0,expScore=0;
-      const hasOwnership=Array.isArray(first.ownership)&&first.ownership.length===243;
-      const hasTerr=Array.isArray(first.territory_probabilities)&&first.territory_probabilities.length===81;
-      const ownership=hasOwnership?Array(243).fill(0):first.ownership;
-      const terr=hasTerr?Array.from({length:81},()=>[0,0,0]):first.territory_probabilities;
-      for(const ev of evals){
-        for(let a=0;a<82;a++)policy82[a]+=ev.policy82[a]/8;
-        value+=ev.value/8;
-        winProb+=ev.win_probability/8;
-        expScore+=ev.expected_score/8;
-        if(hasOwnership)for(let i=0;i<243;i++)ownership[i]+=ev.ownership[i]/8;
-        if(hasTerr)for(let i=0;i<81;i++){terr[i][0]+=ev.territory_probabilities[i][0]/8;terr[i][1]+=ev.territory_probabilities[i][1]/8;terr[i][2]+=ev.territory_probabilities[i][2]/8;}
-      }
-      canonEval={...first,policy82,value:Math.max(-1,Math.min(1,value)),win_probability:winProb,expected_score:expScore,ownership,territory_probabilities:terr};
-    }else{
-      canonEval=await infer(canon);
-    }
+    const groupEvals=await Promise.all(chosenGroups.map(async g=>({eval:await infer(g.boardState),syms:g.syms})));
+    canonEval=averageD4Evaluations(groupEvals);
     lruSet(rawCache,key,canonEval,MAX_RAW_CACHE);
   }
   return inverseTransformEvaluation(canonEval,toCanon);
@@ -147,16 +121,18 @@ async function analyze(id,payload,options,runGeneration){
   if(typeof continuous!=='boolean')throw Error('continuous must be a boolean');
   const searchMode=payload.search_mode??'puct';
   if(searchMode!=='puct'&&searchMode!=='gumbel')throw Error('search_mode must be "puct" or "gumbel"');
+  const d4Samples=payload.d4_samples??1;
+  if(!Number.isInteger(d4Samples)||d4Samples<1||d4Samples>8)throw Error('d4_samples must be an integer between 1 and 8');
   let maxVisits=visits,maxSeconds=null;
   if(continuous){maxVisits=payload.max_visits??10_000_000;if(!Number.isInteger(maxVisits)||maxVisits<1||maxVisits>10_000_000)throw Error('Continuous visit limit must be 1–10,000,000 visits');
     // Optional wall-clock cap for continuous analysis and timed AI moves.
     if(payload.max_seconds!==undefined&&payload.max_seconds!==null){maxSeconds=payload.max_seconds;if(typeof maxSeconds!=='number'||!Number.isFinite(maxSeconds)||maxSeconds<.05||maxSeconds>3600)throw Error('Continuous time limit must be 0.05–3600 seconds');}}
   else if(Object.hasOwn(payload,'max_visits')||Object.hasOwn(payload,'max_seconds'))throw Error('max_visits/max_seconds are only valid for continuous analysis');
-  const base=()=>({api_version:1,state_id:pos.state_id,position:pos,perspective:state.side_to_move,score_kind:'raw_territory_difference',search_mode:searchMode,budget:{visits,seconds},model:{id:manifest.model_id,sha256:manifest.sha256,label:manifest.source_model_label,feature_schema:manifest.feature_schema,ruleset_version:manifest.ruleset_version,score_min:manifest.score_min},execution:'browser',backend});
+  const base=()=>({api_version:1,state_id:pos.state_id,position:pos,perspective:state.side_to_move,score_kind:'raw_territory_difference',search_mode:searchMode,d4_samples:d4Samples,budget:{visits,seconds},model:{id:manifest.model_id,sha256:manifest.sha256,label:manifest.source_model_label,feature_schema:manifest.feature_schema,ruleset_version:manifest.ruleset_version,score_min:manifest.score_min},execution:'browser',backend});
   if(state.result)return {...base(),source:'rule',raw_network:null,exact:{source:'rule',proven_winner:state.result.winner,status:'terminal',threats:[]},proven_winner:state.result.winner,recommended_action:null,mcts:{root_visits:0,root_win_probability:state.result.winner===state.side_to_move?1:0,candidates:[],principal_variation:[],elapsed_seconds:0},done:true,cumulative_elapsed_seconds:(performance.now()-streamStartedAt)/1000};
   // Keep the four raw heads available even when tactics bypass neural expansion.
   // BrowserSearch consumes this cached result for its root expansion.
-  const targetCanonical=canonicalState(state),treeKey=`${manifest.model_id}:${searchMode}:${pos.state_id}`;
+  const targetCanonical=canonicalState(state),treeKey=`${manifest.model_id}:${searchMode}:d4-${d4Samples}:${pos.state_id}`;
   const force=Boolean(payload.force);
   if(force)treeCache.delete(treeKey);
   let cached=force?undefined:lruGet(treeCache,treeKey),raw,search;
@@ -171,8 +147,9 @@ async function analyze(id,payload,options,runGeneration){
         if(sub){promoted=sub;break;}
       }
     }
-    raw=await cachedInfer(state,{force});
-    search=promoted?BrowserSearch.fromNode(promoted,s=>cachedInfer(s),{searchMode,rootSymmetryQuotient:true}):new BrowserSearch(state,s=>s===state?raw:cachedInfer(s),{searchMode,rootSymmetryQuotient:true});
+    raw=await cachedInfer(state,{d4Samples,force});
+    const evalFn=s=>s===state?raw:cachedInfer(s,{d4Samples});
+    search=promoted?BrowserSearch.fromNode(promoted,evalFn,{searchMode,rootSymmetryQuotient:true}):new BrowserSearch(state,evalFn,{searchMode,rootSymmetryQuotient:true});
     lruSet(treeCache,treeKey,{search,raw},MAX_TREE_CACHE);
   }
   const initialVisits=search.rootVisits;
