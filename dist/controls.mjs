@@ -109,7 +109,7 @@ export function pickAiAction(result,temperature=0,rng=Math.random,options={}){
  if(typeof rng==='object'&&rng!==null){options=rng;rng=Math.random;}
  if(typeof rng!=='function')rng=Math.random;
  const {ignoreProvenLoss=true,forceProvenWin=true}=options;
- const bestAction=result?.recommended_action??null;
+ const bestAction=result?.recommended_action??result?.mcts?.candidates?.[0]?.action??null;
  if(bestAction===null)return null;
  const temp=normalizeTemperature(temperature,{fallback:0});
  const candidates=result?.mcts?.candidates||[];

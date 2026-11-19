@@ -1,6 +1,6 @@
-import {RULESET,features,positionPayload,replayPosition,canonicalState,sampleD4Orientations,averageD4Evaluations,inverseTransformEvaluation} from './engine.mjs?v=23';
-import {BrowserSearch} from './browser-search.mjs?v=23';
-import {decodeNetworkHeads} from './local-client.mjs?v=23';
+import {RULESET,features,positionPayload,replayPosition,canonicalState,sampleD4Orientations,averageD4Evaluations,inverseTransformEvaluation} from './engine.mjs?v=24';
+import {BrowserSearch} from './browser-search.mjs?v=24';
+import {decodeNetworkHeads} from './local-client.mjs?v=24';
 
 let ort=null,session=null,manifest=null,backend=null,generation=0,modelCacheSource='network',rawCacheHits=0,rawCacheMisses=0;
 const rawCache=new Map(),treeCache=new Map(),MAX_RAW_CACHE=1024,MAX_TREE_CACHE=24;

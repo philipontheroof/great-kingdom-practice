@@ -1,11 +1,11 @@
-import {newStudy,addNode,pathTo,lineThrough,importDocument,blueEvaluation,studyForSave,resolveBranchLeaf,nextInBranch,branchLeaves,cloneStudyAsLeaf,FORMAT} from './study.mjs?v=23';
-import {facts,stateGroups,territory,canonicalState,positionPayload} from './engine.mjs?v=23';
-import {boardSvg,candidateOutcome,candidateShare} from './board.mjs?v=23';
-import {STORE,persistStudy,retryAnalysis} from './client.mjs?v=23';
-import {PracticeControls,missingNodes,normalizeBudget,analysisFloor,budgetPayload,budgetReached,budgetLabel,BUDGET_RANGE,BUDGET_DEFAULT,TEMPERATURE_DEFAULT,normalizeTemperature,pickAiAction} from './controls.mjs?v=23';
-import {timelineSvg} from './timeline.mjs?v=23';
-import {LocalEngine} from './local-client.mjs?v=23';
-import {loadStaticConfig,loadStaticManifest} from './deployment.mjs?v=23';
+import {newStudy,addNode,pathTo,lineThrough,importDocument,blueEvaluation,studyForSave,resolveBranchLeaf,nextInBranch,branchLeaves,cloneStudyAsLeaf,FORMAT} from './study.mjs?v=24';
+import {facts,stateGroups,territory,canonicalState,positionPayload} from './engine.mjs?v=24';
+import {boardSvg,candidateOutcome,candidateShare} from './board.mjs?v=24';
+import {STORE,persistStudy,retryAnalysis} from './client.mjs?v=24';
+import {PracticeControls,missingNodes,normalizeBudget,analysisFloor,budgetPayload,budgetReached,budgetLabel,BUDGET_RANGE,BUDGET_DEFAULT,TEMPERATURE_DEFAULT,normalizeTemperature,pickAiAction} from './controls.mjs?v=24';
+import {timelineSvg} from './timeline.mjs?v=24';
+import {LocalEngine} from './local-client.mjs?v=24';
+import {loadStaticConfig,loadStaticManifest} from './deployment.mjs?v=24';
 const staticOnly=document.documentElement?.dataset?.execution==='local';
 
 const $=id=>document.getElementById(id),controls=new PracticeControls(),shown=new Map(),SETTINGS='gk-practice-settings-v1';
@@ -81,6 +81,7 @@ function applyPinsOnNavigation(){
  if(!settings.pins.numbers)settings.numbers=false;
 }
 const canAiPlay=()=>!isReading()&&placeMode==='alternate';
+const currentAiTurn=(n=active())=>Boolean(n&&!n.position?.result&&canAiPlay()&&isLeafNode(doc,n.id)&&controls.aiTurn(n.position));
 const active=()=>{const d=currentDoc();return d?.nodes.find(n=>n.id===d.selected);};
 const anchorNode=()=>doc?.nodes.find(n=>n.id===(reading?.anchorId??doc?.selected));
 const backend=()=>$('backend')?.value||(staticOnly?'local':'host');
@@ -165,12 +166,14 @@ async function streamHost(payload,onUpdate,signal){
  if(buffer.trim()){last=JSON.parse(buffer);onUpdate(last);}if(!last?.done)throw Error('분석 연결이 끝났어요. 다시 분석을 시작해 주세요.');return last;
  }finally{await reader.cancel().catch(()=>{});}
 }
-async function search(node,budget,{onUpdate=()=>{},signal,force=false}={}){
- const payload={...positionRequest(node),model_id:doc.model_id,search_mode:settings.searchMode,d4_samples:settings.d4Samples,visits:1600,seconds:budget.unit==='seconds'?budget.value:2,continuous:true,...budgetPayload(budget),...(force?{force:true}:{})};
+async function search(node,budget,{onUpdate=()=>{},signal,force=false,resolveBudget=null}={}){
+ const currentBudget=()=>resolveBudget?resolveBudget():budget;
+ const b0=currentBudget();
+ const payload={...positionRequest(node),model_id:doc.model_id,search_mode:settings.searchMode,d4_samples:settings.d4Samples,visits:1600,seconds:b0.unit==='seconds'?b0.value:2,continuous:true,...budgetPayload(b0),...(force?{force:true}:{})};
  if(backend()==='host')delete payload.max_seconds;
  const inner=new AbortController(),relay=()=>inner.abort();signal?.addEventListener('abort',relay,{once:true});
  let last=null,reached=false;
- const update=r=>{last=r;onUpdate(r);if(!r.done&&(r.mcts?.root_visits>0||r.source==='rule'||r.source==='tactical'||r.stop_reason)&&budgetReached(budget,r)){reached=true;inner.abort();}};
+ const update=r=>{last=r;onUpdate(r);if(!r.done&&(r.mcts?.root_visits>0||r.source==='rule'||r.source==='tactical'||r.stop_reason)&&budgetReached(currentBudget(),r)){reached=true;inner.abort();}};
  try{return await retryAnalysis(()=>backend()==='local'?local.analyze(payload,update,{signal:inner.signal,continuous:true}):streamHost(payload,update,inner.signal),inner.signal);}
  catch(error){if(reached&&last&&!signal?.aborted)return {...last,done:true};throw error;}
  finally{signal?.removeEventListener('abort',relay);}
@@ -345,9 +348,11 @@ async function startAnalysis({ai=false,kind=ai?'ai':'once',force=false}={}){
  if(!active()||moving||batching||!modelAvailable()||(ai&&!canAiPlay()))return;
  cancel();const node=active(),nodeKey=analysisKey(node),readingRef=reading,study=doc,model=doc.model_id,execution=backend(),token=controls.begin(nodeKey,model,execution),controller=new AbortController();analysisController=controller;analyzing=true;analysisKind=kind;
  if(force){node.analysis=null;shown.delete(nodeKey);}
- const ponder=kind==='ponder',budget=ai?settings.play[node.position.side_to_move]:ponder?{unit:'none',value:null}:settings.analysisLimit;if(!ponder)render();else renderSettings();
+ const side=node.position.side_to_move;
+ const ponder=kind==='ponder',budget=ai?settings.play[side]:ponder?{unit:'none',value:null}:settings.analysisLimit;if(!ponder)render();else renderSettings();
+ const resolveBudget=ai?()=>settings.play[side]:ponder?()=>({unit:'none',value:null}):()=>settings.analysisLimit;
  const valid=()=>study===doc&&reading===readingRef&&controls.accepts(token,analysisKey(active()),doc.model_id,backend());let result;
- try{result=await search(node,budget,{force,signal:controller.signal,onUpdate:r=>{if(valid()&&!ponder){acceptResult(r,node,model,execution);if(r.done||Date.now()-lastPaint>=180){lastPaint=Date.now();render();}}}});
+ try{result=await search(node,budget,{force,resolveBudget,signal:controller.signal,onUpdate:r=>{if(valid()&&!ponder){acceptResult(r,node,model,execution);if(r.done||Date.now()-lastPaint>=180){lastPaint=Date.now();render();}}}});
  if(!valid())return;if(!ponder){acceptResult(result,node,model,execution);notice('');}
  }catch(error){if(error.name!=='AbortError'&&valid()&&!ponder)notice(error.message,true);return;}
  finally{analyzing=false;analysisKind=null;analysisController=null;if(valid()){if(!ponder)render();else renderSettings();}}
@@ -382,7 +387,7 @@ async function selectNode(id){
  schedule();
 }
 async function place(action,fromAI=false){
- const node=active(),targetDoc=currentDoc(),readingRef=reading;if(moving||preview||node.position.result)return;
+ const node=active(),targetDoc=currentDoc(),readingRef=reading;if(moving||(!fromAI&&preview)||node.position.result)return;
  if(!isReading()&&!fromAI&&controls.aiTurn(node.position)&&placeMode==='alternate')return notice('AI 차례입니다. AI 착수 토글을 끄면 직접 둘 수 있어요.');
  if(action<81&&!node.position.legal_actions.includes(action))return notice('그 칸에는 둘 수 없어요.',true);
  cancel();const token=controls.epoch,study=doc;moving=true;
@@ -924,7 +929,7 @@ async function batch(){if(batching){cancel();render();return;}if(!modelAvailable
  analysisController=controller;batching=true;controls.visible=true;capture();let completed=0;render();
  try{for(const n of nodes){if(controller.signal.aborted||study!==doc||epoch!==controls.epoch)break;if($('batch-status'))$('batch-status').textContent=`${completed}/${nodes.length} · ${n.ply}수 계산 중`;
  const a=await search(n,budget,{signal:controller.signal});if(study!==doc||epoch!==controls.epoch)break;acceptResult(a,n,model,execution);completed++;renderTimeline();}
- }finally{if(epoch===controls.epoch){batching=false;analysisController=null;if($('batch-status'))$('batch-status').textContent=`${completed}/${nodes.length} 국면 완료`;render();}}
+ }finally{if(epoch===controls.epoch){batching=false;analysisController=null;if($('batch-status'))$('batch-status').textContent=`${completed}/${nodes.length} 국면 완료`;render();schedule();}}
 }
 async function cloneLeafHere(){
  const node=active();
@@ -960,7 +965,9 @@ $('analyze-button')?.addEventListener('click',()=>{
  if(analyzing){if(analysisKind==='ai')controls.playing=false;cancel();render();return;}
  const n=active();if(!n)return;
  onceNode=n.id;controls.visible=true;render();
- run(()=>startAnalysis({kind:'once'}));
+ const aiTurn=currentAiTurn(n);
+ if(aiTurn)controls.playing=true;
+ run(()=>startAnalysis({ai:aiTurn,kind:aiTurn?'ai':'once'}));
 });
 $('reanalyze-button')?.addEventListener('click',()=>{
  const n=active();if(!n||moving||batching||!modelAvailable()||n.position?.result)return;
@@ -1095,7 +1102,8 @@ for(const [k,layerKey] of VIS_KEYS){
   saveSettings();
   render();
   if(k!=='territory'&&k!=='numbers'&&settings.layers[layerKey]&&!nodeAnalysis(active())&&!analyzing&&!moving&&!batching&&modelAvailable()){
-   run(()=>startAnalysis({kind:'once'}));
+   const aiTurn=currentAiTurn(active());
+   run(()=>startAnalysis({ai:aiTurn,kind:aiTurn?'ai':'once'}));
   }
  });
  $(`vis-pin-${k}`)?.addEventListener('change',e=>{
@@ -1109,7 +1117,8 @@ for(const [k,layerKey] of VIS_KEYS){
   saveSettings();
   render();
   if(k!=='territory'&&k!=='numbers'&&settings.layers[layerKey]&&!nodeAnalysis(active())&&!analyzing&&!moving&&!batching&&modelAvailable()){
-   run(()=>startAnalysis({kind:'once'}));
+   const aiTurn=currentAiTurn(active());
+   run(()=>startAnalysis({ai:aiTurn,kind:aiTurn?'ai':'once'}));
   }
  });
 }
@@ -1119,7 +1128,9 @@ $('visual-once')?.addEventListener('click',()=>run(async()=>{
  if(nodeAnalysis(n)||analyzing){onceNode=n.id;render();return;}
  if(!modelAvailable())throw Error('모델이 준비되면 분석할 수 있어요.');
  if(!await ask('아직 분석하지 않은 국면이에요','현재 국면 분석을 시작하고 결과를 실시간으로 볼까요?','분석하고 보기')||active()!==n)return;
- onceNode=n.id;await startAnalysis();
+ onceNode=n.id;
+ const aiTurn=currentAiTurn(n);
+ await startAnalysis({ai:aiTurn,kind:aiTurn?'ai':'once'});
 }));
 $('visual-continuous')?.addEventListener('click',e=>{
  if(controls.anyContinuous()){controls.visualContinuous=e.target.checked;saveSettings();render();return;}
@@ -1146,6 +1157,12 @@ for(const s of SIDES){
    settings.play[s]=readBudget(`play-${s}`,settings.play[s],{fallback:'seconds'});
    if(enforceFloor())notice(`분석 제한을 ${sideName(s)} 착수 탐색량(${budgetLabel(settings.analysisLimit)}) 이상으로 올렸어요.`);
    saveSettings();render();
+   const n=active();
+   if(currentAiTurn(n)&&n.position.side_to_move===s&&!moving&&!batching&&modelAvailable()){
+    if(analyzing)cancel();
+    render();
+    schedule();
+   }
  };
  $(`play-${s}-unit`)?.addEventListener('change',budgetChanged);$(`play-${s}-value`)?.addEventListener('change',budgetChanged);
 }
@@ -1159,7 +1176,7 @@ $('play-ponder')?.addEventListener('change',e=>{
   settings.analysisLimit={unit:'none',value:null};
   if(controls.anyAI()){for(const side of SIDES)controls.continuous[side]=true;}
  }
- saveSettings();if(!settings.ponder&&analysisKind==='ponder')cancel();render();if(settings.ponder)schedule();
+ saveSettings();if(!settings.ponder&&analysisKind==='ponder')cancel();render();if(settings.ponder&&!analyzing)schedule();
 });
 $('ai-seconds')?.addEventListener('change',()=>{
  const val=Number($('ai-seconds').value);
@@ -1198,7 +1215,7 @@ $('model-select')?.addEventListener('change',()=>{cancel();controls.playing=fals
 $('first')?.addEventListener('click',()=>run(()=>selectNode(doc.nodes[0].id)));$('previous')?.addEventListener('click',()=>{if(active().parent)run(()=>selectNode(active().parent));});$('next')?.addEventListener('click',()=>{const n=nextInBranch(doc,doc.selected,doc.branch_leaf);if(n)run(()=>selectNode(n.id));});$('last')?.addEventListener('click',()=>{const n=lineThrough(doc,doc.selected,doc.branch_leaf).at(-1);if(n)run(()=>selectNode(n.id));});$('pass')?.addEventListener('click',()=>run(()=>place(81)));
 $('timeline')?.addEventListener('click',e=>{const rt=e.target?.closest?.('[data-reading-node]');if(rt){run(()=>selectReadingNode(rt.dataset.readingNode));return;}const t=e.target?.closest?.('[data-node]');if(t)run(()=>selectNode(t.dataset.node));});$('timeline')?.addEventListener('keydown',e=>{if(['Enter',' '].includes(e.key)){const rt=e.target?.closest?.('[data-reading-node]');if(rt){e.preventDefault();run(()=>selectReadingNode(rt.dataset.readingNode));return;}const t=e.target?.closest?.('[data-node]');if(t){e.preventDefault();run(()=>selectNode(t.dataset.node));}}});
 for(const [id,value]of [['graph-win','win'],['graph-score','score']])$(id)?.addEventListener('click',()=>{graphMode=value;$('graph-win')?.classList.toggle('active',value==='win');$('graph-score')?.classList.toggle('active',value==='score');renderTimeline();});
-$('pv-import')?.addEventListener('click',()=>run(importPV));$('preview-exit')?.addEventListener('click',()=>{preview=null;renderBoard();});
+$('pv-import')?.addEventListener('click',()=>run(importPV));$('preview-exit')?.addEventListener('click',()=>{preview=null;renderBoard();if(!analyzing)schedule();});
 $('notes')?.addEventListener('input',()=>{if(isReading())return;const had=Boolean((active().notes||'').trim());active().notes=$('notes').value;save();if(had!==Boolean(active().notes.trim()))renderTimeline();else renderMemos();});$('title')?.addEventListener('input',()=>{doc.title=$('title').value;save();});
 $('new-button')?.addEventListener('click',()=>run(showNew));$('new-close')?.addEventListener('click',()=>$('new-dialog')?.close());$('neutral-setup')?.addEventListener('change',()=>{$('neutral-coordinates').hidden=$('neutral-setup').value!=='custom';});
 $('new-form')?.addEventListener('submit',e=>{e.preventDefault();run(()=>createGame({neutral:$('neutral-setup').value==='none'?null:$('neutral-setup').value==='center'?[4,4]:[Number($('neutral-row').value)-1,Number($('neutral-col').value)-1],komi:Number($('komi').value)}));});
