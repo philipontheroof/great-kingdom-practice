@@ -552,6 +552,7 @@ function renderAnalysis(){
  if($('result-empty'))$('result-empty').textContent=!doc.model_id?'모델이 연결되지 않았어요. 양쪽 성을 직접 두며 국면을 살펴볼 수 있어요.':active().position.result?'대국이 종료되었어요. 이전 수로 돌아가 새 가지를 만들어 보세요.':'이 국면은 아직 분석 전이에요. [현재 국면 분석]을 누르거나 [📌 분석 고정]을 켜면 바로 분석돼요.';
  if($('win-column'))$('win-column').hidden=!L.win;
  if($('win-value'))$('win-value').textContent=pct(values.win);
+ if($('win-summary-value'))$('win-summary-value').textContent=pct(values.win);
  if($('blue-percent'))$('blue-percent').textContent=pct(values.win);
  if($('red-percent'))$('red-percent').textContent=pct(values.win===null?null:1-values.win);
  if($('win-fill')){$('win-fill').style.height=values.win===null?'0%':`${values.win*100}%`;if($('win-fill').parentElement)$('win-fill').parentElement.style.background=values.win===null?'#f1f5f9':'';}
@@ -569,10 +570,12 @@ function renderAnalysis(){
  if($('raw-value'))$('raw-value').textContent=analysis?.source==='rule'?'규칙 판정 · 종국의 실제 영토 차이 · 포위 승패는 집수와 별도':analysis?`모델 원평가 ${L.win?pct(values.rawWin):'(승률 숨김)'} · 집차이는 원평가에 덤 반영`:'모델 원평가와 탐색 결과를 구분해서 보여줘요.';
  if($('candidate-box'))$('candidate-box').hidden=!L.policy;
  if($('pv-box'))$('pv-box').hidden=!L.pv;
- function candidateHistogramSvg(candidate,sharedMax,scoreMinDefault){
-  const dist=candidate?.score_distribution;
-  if(!Array.isArray(dist)||!dist.length)return '';
-  const scoreMin=Number.isFinite(candidate.score_min)?candidate.score_min:(Number.isFinite(scoreMinDefault)?scoreMinDefault:-((dist.length-1)/2));
+ function candidateHistogramSvg(candidate,sharedMax,scoreMinDefault,isFirst=true){
+  const rawDist=candidate?.score_distribution;
+  if(!Array.isArray(rawDist)||!rawDist.length)return '';
+  const rawScoreMin=Number.isFinite(candidate.score_min)?candidate.score_min:(Number.isFinite(scoreMinDefault)?scoreMinDefault:-((rawDist.length-1)/2));
+  const dist=isFirst?rawDist:Array.from({length:rawDist.length},(_,i)=>rawDist[rawDist.length-1-i]);
+  const scoreMin=isFirst?rawScoreMin:-(rawScoreMin+rawDist.length-1);
   const w=240,h=32,step=w/dist.length,max=Math.max(sharedMax,0.0001);
   const zeroIdx=0-scoreMin;
   const zeroX=(zeroIdx>=0&&zeroIdx<dist.length)?(zeroIdx+0.5)*step:null;
@@ -584,7 +587,8 @@ function renderAnalysis(){
     return `<rect x="${(i*step).toFixed(2)}" y="${(h-2-barH).toFixed(2)}" width="${Math.max(0.7,step*0.88).toFixed(2)}" height="${barH.toFixed(2)}" fill="${fill}" fill-opacity="0.82"/>`;
   }).join('');
   const zeroLine=zeroX!==null?`<line x1="${zeroX.toFixed(2)}" y1="1" x2="${zeroX.toFixed(2)}" y2="${h-1}" stroke="#94a3b8" stroke-width="0.7" stroke-dasharray="2 1.5"/>`:'';
-  const expectedText=candidate.expected_score===null?'—':`${signed(candidate.expected_score)}집`;
+  const blueExpected=typeof candidate.expected_score==='number'?(isFirst||candidate.expected_score===0?candidate.expected_score:-candidate.expected_score):null;
+  const expectedText=blueExpected===null?'—':`${signed(blueExpected)}집`;
   return `<div class="candidate-hist-wrap"><div class="candidate-hist-meta"><span>MCTS 경로 예상 집차이 분포 (x: 집차이 · y: 확률)</span><span>평균 ${expectedText}</span></div><svg class="candidate-hist-svg" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" role="img" aria-label="후보수 예상 집차이 분포">${zeroLine}${bars}<line x1="0" y1="${h-2}" x2="${w}" y2="${h-2}" stroke="#cbd5e1" stroke-width="0.6"/></svg></div>`;
  }
  const rawCandidates=analysis?.mcts?.candidates||[];
@@ -608,7 +612,7 @@ function renderAnalysis(){
    const gStageMap={selected:['1순위','selected'],finalist:['결선',''],active:['진행',''],eliminated:['탈락','eliminated'],unconsidered:['후보외','eliminated']};
    const gInfo=isGumbel&&candidate.gumbel_status&&gStageMap[candidate.gumbel_status];
    const gStageTag=gInfo?`<span class="gumbel-stage-badge${gInfo[1]?` ${gInfo[1]}`:''}">${gInfo[0]}</span>`:'';
-   const histHtml=L.margin?candidateHistogramSvg(candidate,sharedHistMax,analysis.raw_network?.score_min):'';
+   const histHtml=L.margin?candidateHistogramSvg(candidate,sharedHistMax,analysis.raw_network?.score_min,analysis.perspective==='first'):'';
    const orbitNote=candidate.orbit_size>1?` · 대칭 ${candidate.orbit_size}`:'';
    button.innerHTML=`<span><span class="candidate-rank">${i+1}</span><span class="candidate-coordinate">${coord(candidate.action)}${provenTag}<small>모델 선호도 ${pct(analysis.raw_network?.policy[candidate.action])}</small></span></span><span>${pct(share)}<small>${candidate.visits} visits${orbitNote}${gStageTag}</small>${diffLine}</span><span>${L.win?pct(probability):'—'}<small>Q ${signed(candidate.q===null?null:(analysis.perspective==='first'?1:-1)*candidate.q)} · 덤 전 ${L.margin?signed(candidate.expected_score===null?null:(analysis.perspective==='first'?1:-1)*candidate.expected_score):'—'}집</small></span>${histHtml}`;
    button.addEventListener('click',()=>run(()=>place(candidate.action)));$('candidates').append(button);

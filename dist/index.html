@@ -1,6 +1,6 @@
 <!doctype html>
 <html data-execution="local" lang="ko">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#172e45"><title>Great Kingdom · 연습실</title><link rel="icon" href="data:,"><link rel="stylesheet" href="./style.css?v=27"><script type="module" src="./app.mjs?v=28"></script></head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#172e45"><title>Great Kingdom · 연습실</title><link rel="icon" href="data:,"><link rel="stylesheet" href="./style.css?v=28"><script type="module" src="./app.mjs?v=29"></script></head>
 <body>
   <main>
     <header class="study-toolbar">
@@ -149,11 +149,11 @@
           <div id="result-body" hidden>
             <div class="metric-grid">
               <div id="win-summary-box">
-                <small>빨간 성 승률</small>
+                <small>파란 성 승률</small>
                 <strong id="win-summary-value">—</strong>
               </div>
               <div id="margin-box">
-                <small><span id="margin-caption">예상 집차이</span> <span title="모델의 예상 영토 차이에서 덤을 반영한 값 · 빨강 기준">ⓘ</span></small>
+                <small><span id="margin-caption">예상 집차이</span> <span title="모델의 예상 영토 차이에서 덤을 반영한 값 · 파랑 기준">ⓘ</span></small>
                 <strong id="margin-value">—</strong>
               </div>
               <div>
@@ -186,7 +186,7 @@
               <div id="candidates" class="candidates">
                 <p class="empty-state">분석하면 후보수가 여기에 나타나요.</p>
               </div>
-              <p class="candidate-help">방문 비율은 승률과 달라요. 승률·Q·점수는 빨강 기준, 후보 점수는 덤 전입니다. 후보를 누르면 새 분기를 만들어요.</p>
+              <p class="candidate-help">방문 비율은 승률과 달라요. 승률·Q·점수는 파랑 기준, 후보 점수는 덤 전입니다. 후보를 누르면 새 분기를 만들어요.</p>
             </div>
             <details class="more-metrics">
               <summary>자세한 분석값</summary>
@@ -205,7 +205,7 @@
               <button id="graph-score">집차이</button>
             </div>
           </div>
-          <p class="graph-note">위는 선택 가지 평가(빨강 유리 위 / 파랑 유리 아래), 아래는 모든 분기 · 노드를 눌러 그 국면으로 이동 · <span class="memo-dot-inline"></span> 메모 있음</p>
+          <p class="graph-note">위는 선택 가지 평가(파랑 유리 위 / 빨강 유리 아래), 아래는 모든 분기 · 노드를 눌러 그 국면으로 이동 · <span class="memo-dot-inline"></span> 메모 있음</p>
           <div id="branch-bar" class="branch-bar" aria-label="현재 선택된 가지" hidden></div>
           <div id="timeline" class="timeline-scroll" aria-label="평가 그래프와 수순 분기"></div>
           <div class="tree-tools">
