@@ -1,6 +1,6 @@
 import {RULESET,canonicalD4State,legalActions,features,positionPayload,replayPosition,canonicalState,sampleD4Orientations,averageD4Evaluations,inverseTransformEvaluation} from './engine.mjs?v=28';
-import {BrowserSearch} from './browser-search.mjs?v=29';
-import {decodeNetworkHeads} from './local-client.mjs?v=29';
+import {BrowserSearch} from './browser-search.mjs?v=30';
+import {decodeNetworkHeads} from './local-client.mjs?v=30';
 
 let ort=null,session=null,manifest=null,backend=null,generation=0,modelCacheSource='network',rawCacheHits=0,rawCacheMisses=0;
 const rawCache=new Map(),treeCache=new Map(),MAX_RAW_CACHE=1024,MAX_TREE_CACHE=24;
@@ -126,6 +126,8 @@ async function analyze(id,payload,options,runGeneration){
   if(!Number.isInteger(visits)||visits<1||visits>1600||!Number.isFinite(seconds)||seconds<.05||seconds>10)throw Error('Analysis budget is outside the supported range');
   const continuous=payload.continuous??options.continuous??false;
   if(typeof continuous!=='boolean')throw Error('continuous must be a boolean');
+  const playOnly=payload.play_only??false;
+  if(typeof playOnly!=='boolean')throw Error('play_only must be a boolean');
   const searchMode=payload.search_mode??'puct';
   if(searchMode!=='puct'&&searchMode!=='gumbel')throw Error('search_mode must be "puct" or "gumbel"');
   const d4Samples=payload.d4_samples??1;
@@ -137,15 +139,13 @@ async function analyze(id,payload,options,runGeneration){
   else if(Object.hasOwn(payload,'max_visits')||Object.hasOwn(payload,'max_seconds'))throw Error('max_visits/max_seconds are only valid for continuous analysis');
   const base=()=>({api_version:1,state_id:pos.state_id,position:pos,perspective:state.side_to_move,score_kind:'raw_territory_difference',search_mode:searchMode,d4_samples:d4Samples,budget:{visits,seconds},model:{id:manifest.model_id,sha256:manifest.sha256,label:manifest.source_model_label,feature_schema:manifest.feature_schema,ruleset_version:manifest.ruleset_version,score_min:manifest.score_min},execution:'browser',backend});
   if(state.result)return {...base(),source:'rule',raw_network:null,exact:{source:'rule',proven_winner:state.result.winner,status:'terminal',threats:[]},proven_winner:state.result.winner,recommended_action:null,mcts:{root_visits:0,root_win_probability:state.result.winner===state.side_to_move?1:0,candidates:[],principal_variation:[],elapsed_seconds:0},done:true,cumulative_elapsed_seconds:(performance.now()-streamStartedAt)/1000};
-  // Keep the four raw heads available even when tactics bypass neural expansion.
-  // BrowserSearch consumes this cached result for its root expansion.
   const v6=manifest.ruleset_version===RULESET;
   const targetCanonical=canonicalState(state),treeKey=`${manifest.model_id}:${searchMode}:d4-${d4Samples}:${pos.state_id}`;
   const force=Boolean(payload.force);
   if(force)treeCache.delete(treeKey);
-  let cached=force?undefined:lruGet(treeCache,treeKey),raw,search;
+  let cached=force?undefined:lruGet(treeCache,treeKey);
   if(cached){
-    raw=cached.raw;search=cached.search;search.started=performance.now();
+    cached.search.started=performance.now();
   }else{
     let promoted=null;
     if(!force){
@@ -156,12 +156,28 @@ async function analyze(id,payload,options,runGeneration){
         if(sub&&(!v6||!entry.search.shareD4)){promoted={node:sub,shared:entry.search.shared};break;}
       }
     }
-    raw=await cachedInfer(state,{d4Samples,force});
-    const evalFn=s=>s===state?raw:cachedInfer(s,{d4Samples,exactOrientation:v6&&d4Samples===1});
-    search=promoted?BrowserSearch.fromNode(promoted.node,evalFn,{searchMode,rootSymmetryQuotient:true,v6,shared:promoted.shared}):new BrowserSearch(state,evalFn,{searchMode,rootSymmetryQuotient:true,v6});
-    search.modelId=manifest.model_id;search.samples=d4Samples;
-    lruSet(treeCache,treeKey,{search,raw},MAX_TREE_CACHE);
+    cached={raw:null,search:null};
+    let rawRequest;
+    cached.getRaw=async()=>{
+      rawRequest??=cachedInfer(state,{d4Samples,force});
+      try{return cached.raw=await rawRequest;}
+      catch(error){rawRequest=null;throw error;}
+    };
+    const rootState=promoted?.node.state??state;
+    const evalFn=s=>s===rootState?cached.getRaw():cachedInfer(s,{d4Samples,exactOrientation:v6&&d4Samples===1});
+    const searchOptions={searchMode,rootSymmetryQuotient:true,v6,shared:promoted?.shared};
+    cached.search=promoted?BrowserSearch.fromNode(promoted.node,evalFn,searchOptions):new BrowserSearch(state,evalFn,searchOptions);
+    cached.search.modelId=manifest.model_id;cached.search.samples=d4Samples;
+    lruSet(treeCache,treeKey,cached,MAX_TREE_CACHE);
   }
+  const {search}=cached;
+  // Explicit analysis needs the raw heads even when a proof closes the tree.
+  if(!playOnly)await cached.getRaw();
+  const rawNetwork=()=>{
+    const raw=cached.raw;
+    return raw?{policy:raw.policy82,win_probability:raw.win_probability,expected_score:raw.expected_score,
+      score_min:raw.score_min,score_distribution:raw.score_distribution,territory_probabilities:raw.territory_probabilities}:null;
+  };
   const initialVisits=search.rootVisits;
   const searchStartedAt=performance.now();
   const deadline=searchStartedAt+seconds*1000,continuousDeadline=maxSeconds===null?Infinity:searchStartedAt+maxSeconds*1000;let snapshot,lastUpdateAt=null;
@@ -184,7 +200,7 @@ async function analyze(id,payload,options,runGeneration){
     const earlyDone=(earlyStop||Boolean(search.root?.proof))&&search.shouldStopEarly();
     const done=earlyDone||(!continuous?(snapshot.mcts.root_visits>=visits||performance.now()>=deadline):(snapshot.mcts.root_visits>=maxVisits||performance.now()>=continuousDeadline));
     const vps=currentVps();
-    const result={...snapshot,...base(),stats:runtimeStats(vps),raw_network:{policy:raw.policy82,win_probability:raw.win_probability,expected_score:raw.expected_score,score_min:raw.score_min,score_distribution:raw.score_distribution,territory_probabilities:raw.territory_probabilities},done,cumulative_elapsed_seconds:(performance.now()-streamStartedAt)/1000};
+    const result={...snapshot,...base(),stats:runtimeStats(vps),raw_network:rawNetwork(),done,cumulative_elapsed_seconds:(performance.now()-streamStartedAt)/1000};
     const now=performance.now();
     // Coalesce very fast tactical batches so a continuous search does not
     // flood the UI with hundreds of renders per second. Always send the first
@@ -194,7 +210,7 @@ async function analyze(id,payload,options,runGeneration){
     if(continuous)await new Promise(resolve=>setTimeout(resolve,0));
   }while(runGeneration===generation);
   if(runGeneration!==generation)throw new DOMException('Analysis cancelled','AbortError');
-  return {...snapshot,...base(),stats:runtimeStats(currentVps()),raw_network:{policy:raw.policy82,win_probability:raw.win_probability,expected_score:raw.expected_score,score_min:raw.score_min,score_distribution:raw.score_distribution,territory_probabilities:raw.territory_probabilities},done:true,cumulative_elapsed_seconds:(performance.now()-streamStartedAt)/1000};
+  return {...snapshot,...base(),stats:runtimeStats(currentVps()),raw_network:rawNetwork(),done:true,cumulative_elapsed_seconds:(performance.now()-streamStartedAt)/1000};
 }
 
 onmessage=async event=>{

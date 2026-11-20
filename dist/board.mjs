@@ -31,9 +31,9 @@ export function candidateShare(candidate,analysis=null) {
 export function selectDisplayCandidates(analysis=null) {
   const raw=analysis?.mcts?.candidates||[];
   const visited=raw.filter(c=>c&&c.visits>0);
-  const visible=visited.filter(c=>candidateShare(c,analysis)>=0.0005||candidateOutcome(c,analysis)==='win');
+  const visible=raw.filter(c=>c&&(c.visits>0&&candidateShare(c,analysis)>=0.0005||candidateOutcome(c,analysis)==='win'));
   const boardVisible=visited.filter(c=>candidateShare(c,analysis)>=0.0005);
-  const passVisited=visited.find(c=>c.action===81&&(candidateShare(c,analysis)>=0.0005||candidateOutcome(c,analysis)!==null))??null;
+  const passVisited=raw.find(c=>c?.action===81&&(candidateOutcome(c,analysis)==='win'||c.visits>0&&(candidateShare(c,analysis)>=0.0005||candidateOutcome(c,analysis)!==null)))??null;
   if(visited.length){
     return {raw,visited,visible,boardVisible,passCandidate:passVisited,tacticalFallback:false,mode:'visited'};
   }
@@ -45,6 +45,12 @@ export function selectDisplayCandidates(analysis=null) {
     return {raw,visited,visible:[],boardVisible:[],passCandidate:null,tacticalFallback:false,mode:'proven_loss'};
   }
   const rec=analysis.recommended_action;
+  if(status==='must_defend'&&raw.length===1&&raw[0]?.action===rec){
+    const fc=raw.find(c=>c.action===rec);
+    if(fc){
+      return {raw,visited,visible:[fc],boardVisible:[],passCandidate:rec===81?fc:null,tacticalFallback:true,mode:'forced_defense'};
+    }
+  }
   const isWin=analysis.source==='tactical'||status==='immediate_win'||Boolean(analysis.proven_winner&&analysis.proven_winner===analysis.perspective);
   if(isWin){
     const winning=raw.filter(c=>candidateOutcome(c,analysis)==='win');
@@ -54,13 +60,17 @@ export function selectDisplayCandidates(analysis=null) {
     const passWin=pool.find(c=>c.action===81)||null;
     return {raw,visited,visible:finalPool,boardVisible:[],passCandidate:passWin,tacticalFallback:true,mode:'tactical_win'};
   }
-  if(status==='must_defend'&&rec!==null&&rec!==undefined){
-    const fc=raw.find(c=>c.action===rec);
-    if(fc){
-      return {raw,visited,visible:[fc],boardVisible:[],passCandidate:rec===81?fc:null,tacticalFallback:true,mode:'forced_defense'};
-    }
-  }
   return {raw,visited,visible:[],boardVisible:[],passCandidate:null,tacticalFallback:false,mode:'pending'};
+}
+
+export function passCandidateDetail(selection,analysis){
+  const candidate=selection.passCandidate;
+  if(!candidate)return '';
+  if(selection.mode==='forced_defense')return '유일';
+  const outcome=candidateOutcome(candidate,analysis);
+  const proof=outcome==='win'?'필승':outcome==='loss'?'필패':'';
+  const share=candidateShare(candidate,analysis);
+  return [proof,share>=0.0005?`${(share*100).toFixed(1)}%`:''].filter(Boolean).join(' ');
 }
 
 export function candidateRadius(share,maxShare,{hasProven=false,hasOwnership=false}={}){
@@ -107,8 +117,9 @@ export function boardSvg(position,{actions=[],lastAction=null,analysis=null,show
   const ranks=new Map(candidates.map((c,i)=>[c.action,{...c,rank:i+1,isBest:bestCandidate?.action===c.action}]));
   const extraProven=new Map();
   if(showCandidates){
-    for(const c of allVisited){
-      if(c.action!==81&&!ranks.has(c.action)&&candidateOutcome(c,analysis)!==null){
+    for(const c of allCandidates){
+      const outcome=candidateOutcome(c,analysis);
+      if(c.action!==81&&!ranks.has(c.action)&&(c.visits>0&&outcome!==null||selection.mode==='visited'&&outcome==='win')){
         extraProven.set(c.action,c);
       }
     }
@@ -209,7 +220,8 @@ export function boardSvg(position,{actions=[],lastAction=null,analysis=null,show
     const isForcedPass=Boolean(passCandidate&&selection.mode==='forced_defense');
     const passOutcome=isForcedPass?'win':(passCandidate?candidateOutcome(passCandidate,analysis):'loss');
     const passShare=passCandidate?candidateShare(passCandidate,analysis):0;
-    const label=isForcedPass?'패스 유일':passCandidate?(passShare>=0.0005?`${passOutcome==='win'?'패스 필승':passOutcome==='loss'?'패스 필패':'패스'} ${(passShare*100).toFixed(1)}%`:(passOutcome==='win'?'패스 필승':passOutcome==='loss'?'패스 필패':'패스')):'패스 필패';
+    const detail=passCandidateDetail(selection,analysis);
+    const label=passCandidate?(detail?`패스 ${detail}`:'패스'):'패스 필패';
     const w=passCandidate?(passOutcome?148:128):96,rx=580-w;
     const fill=passOutcome==='win'?'#15803d':passOutcome==='loss'?'#fee2e2':passIsBest?(isGumbel?'#4f46e5':'#327967'):(isGumbel?'#eef2ff':'#e0ece8');
     const stroke=passOutcome==='win'?'#fbbf24':passOutcome==='loss'?'#ef4444':passIsBest?(isGumbel?'#4338ca':'#327967'):(isGumbel?'#a5b4fc':'#b5cec4');

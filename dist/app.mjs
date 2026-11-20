@@ -1,10 +1,10 @@
 import {newStudy,addNode,pathTo,lineThrough,importDocument,blueEvaluation,studyForSave,resolveBranchLeaf,nextInBranch,branchLeaves,FORMAT} from './study.mjs?v=25';
 import {facts,stateGroups,territory,canonicalState,positionPayload} from './engine.mjs?v=28';
-import {boardSvg,candidateOutcome,candidateShare,selectDisplayCandidates} from './board.mjs?v=30';
+import {boardSvg,candidateOutcome,candidateShare,selectDisplayCandidates,passCandidateDetail} from './board.mjs?v=31';
 import {STORE,persistStudy,retryAnalysis} from './client.mjs?v=25';
-import {PracticeControls,missingNodes,normalizeBudget,analysisFloor,budgetPayload,searchRequestBudget,budgetReached,budgetLabel,BUDGET_RANGE,BUDGET_DEFAULT,TEMPERATURE_DEFAULT,normalizeTemperature,pickAiAction} from './controls.mjs?v=26';
+import {PracticeControls,missingNodes,normalizeBudget,analysisFloor,budgetPayload,searchRequestBudget,budgetReached,budgetLabel,BUDGET_RANGE,BUDGET_DEFAULT,TEMPERATURE_DEFAULT,normalizeTemperature,pickAiAction} from './controls.mjs?v=27';
 import {timelineSvg} from './timeline.mjs?v=25';
-import {LocalEngine} from './local-client.mjs?v=29';
+import {LocalEngine} from './local-client.mjs?v=30';
 import {loadStaticConfig,loadStaticManifest} from './deployment.mjs?v=25';
 const staticOnly=document.documentElement?.dataset?.execution==='local';
 
@@ -12,6 +12,7 @@ const $=id=>document.getElementById(id),controls=new PracticeControls(),shown=ne
 const SIDES=['first','second'];
 const STOP_REASON_LABELS={
  proven_win:{label:'필승법 발견',cls:'win'},
+ forced_defense:{label:'유일 방어수 발견',cls:'complete'},
  proven_loss:{label:'필패 발견',cls:'loss'},
  fully_explored:{label:'전체 탐색완료',cls:'complete'},
 };
@@ -85,9 +86,9 @@ const canAiPlay=()=>!isReading()&&placeMode==='alternate';
 const currentAiTurn=(n=active())=>Boolean(n&&!n.position?.result&&canAiPlay()&&(isLeafNode(doc,n.id)||forceAiUntilLeaf)&&controls.aiTurn(n.position));
 const active=()=>{const d=currentDoc();return d?.nodes.find(n=>n.id===d.selected);};
 const anchorNode=()=>doc?.nodes.find(n=>n.id===(reading?.anchorId??doc?.selected));
-const backend=()=>$('backend')?.value||(staticOnly?'local':'host');
-const modelAvailable=()=>backendReady&&Boolean(config?.models.some(m=>m.id===doc?.model_id))&&(backend()==='host'||localModel===doc?.model_id);
-const nodeAnalysis=n=>n?.analysis&&n.analysis.backend===backend()&&(!n.analysis.model||n.analysis.model.id===doc?.model_id)&&(n.analysis.search_mode||'puct')===settings.searchMode&&(backend()!=='local'||(n.analysis.d4_samples??1)===settings.d4Samples)?n.analysis:null;
+const backend=()=> 'local';
+const modelAvailable=()=>backendReady&&Boolean(config?.models.some(m=>m.id===doc?.model_id))&&localModel===doc?.model_id;
+const nodeAnalysis=n=>n?.analysis&&n.analysis.backend===backend()&&(!n.analysis.model||n.analysis.model.id===doc?.model_id)&&(n.analysis.search_mode||'puct')===settings.searchMode&&(n.analysis.d4_samples??1)===settings.d4Samples?n.analysis:null;
 const displayAnalysis=n=>{
  if(!n)return null;
  const a=shown.get(analysisKey(n))||nodeAnalysis(n);
@@ -105,13 +106,18 @@ const signed=v=>typeof v==='number'?`${v>0?'+':''}${v.toFixed(1)}`:'—';
 const sourceLabel=s=>({network:'모델 원평가',mcts:'MCTS 탐색',tactical:'전술 증명',rule:'규칙 판정'}[s]||'분석 전');
 const sideName=s=>s==='first'?'파랑':'빨강';
 function notice(message,error=false){if(!$('notice'))return;$('notice').textContent=message;$('notice').classList.toggle('error',error);$('notice').hidden=!message;}
-async function api(path,payload,signal){if(staticOnly)throw Error('이 배포본은 모든 대국과 분석을 기기에서 실행합니다.');const response=await fetch(`/api/v1/${path}`,payload===undefined?{signal}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload),signal});const data=await response.json();if(!response.ok)throw Object.assign(Error(data.error||'실행부 요청 실패'),{status:response.status});return data;}
+async function assetJson(path){
+ const response=await fetch(`/api/v1/${path}`);
+ const data=await response.json();
+ if(!response.ok)throw Error(data.error||'모델 파일을 불러오지 못했어요.');
+ return data;
+}
 function library(){const v=JSON.parse(localStorage.getItem(STORE)||'[]');if(!Array.isArray(v))throw Error('저장 목록을 읽을 수 없어요.');return v;}
 function saveNow(){if(!doc)return true;try{persistStudy(localStorage,doc);if($('save-state'))$('save-state').textContent='기기에 저장됨';return true;}catch{notice('자동 저장 실패 · 내보내기로 기보를 보관해 주세요.',true);if($('save-state'))$('save-state').textContent='저장 실패';return false;}}
 function save(){clearTimeout(saveTimer);if($('save-state'))$('save-state').textContent='저장 중';saveTimer=setTimeout(saveNow,200);}
 function cancel(){controls.invalidate();analysisController?.abort();analysisController=null;local?.cancel();analyzing=false;analysisKind=null;batching=false;moving=false;preview=null;}
 function positionRequest(node=active()){return {ruleset_version:doc.ruleset_version,setup:{board:node.position.board.slice(),side_to_move:node.position.side_to_move,previous_move_was_pass:Boolean(node.position.previous_move_was_pass),komi:doc.setup.komi,result:node.position.result},actions:[]};}
-async function position(payload){if(backend()==='local'){if(!local)throw Error('기기 내 엔진을 먼저 준비해 주세요.');return local.position(payload);}return api('position',payload);}
+async function position(payload){return local.position(payload);}
 function capture(){for(const n of doc.nodes){const a=nodeAnalysis(n);if(a)shown.set(n.id,a);}}
 
 // ---- Settings -------------------------------------------------------------
@@ -159,23 +165,14 @@ function writeBudget(prefix,budget,min=null){
 }
 
 // ---- Search ---------------------------------------------------------------
-async function streamHost(payload,onUpdate,signal){
- const response=await fetch('/api/v1/analyze-stream',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload),signal});
- if(!response.ok){const error=await response.json();throw Object.assign(Error(error.error||'분석 실패'),{status:response.status});}
- const reader=response.body.getReader(),decoder=new TextDecoder();let buffer='',last=null;
- try{while(true){const {value,done}=await reader.read();buffer+=decoder.decode(value,{stream:!done});let index;while((index=buffer.indexOf('\n'))>=0){const line=buffer.slice(0,index);buffer=buffer.slice(index+1);if(line.trim()){last=JSON.parse(line);if(last.error)throw Error(last.error);onUpdate(last);}}if(done)break;}
- if(buffer.trim()){last=JSON.parse(buffer);onUpdate(last);}if(!last?.done)throw Error('분석 연결이 끝났어요. 다시 분석을 시작해 주세요.');return last;
- }finally{await reader.cancel().catch(()=>{});}
-}
-async function search(node,budget,{onUpdate=()=>{},signal,force=false,resolveBudget=null}={}){
+async function search(node,budget,{onUpdate=()=>{},signal,force=false,resolveBudget=null,playOnly=false}={}){
  const currentBudget=()=>resolveBudget?resolveBudget():budget;
  const b0=currentBudget();
- const payload={...positionRequest(node),model_id:doc.model_id,search_mode:settings.searchMode,d4_samples:settings.d4Samples,...searchRequestBudget(b0),...(force?{force:true}:{})};
- if(backend()==='host')delete payload.max_seconds;
+ const payload={...positionRequest(node),model_id:doc.model_id,search_mode:settings.searchMode,d4_samples:settings.d4Samples,...searchRequestBudget(b0),...(force?{force:true}:{}),...(playOnly?{play_only:true}:{})};
  const inner=new AbortController(),relay=()=>inner.abort();signal?.addEventListener('abort',relay,{once:true});
  let last=null,reached=false;
  const update=r=>{last=r;onUpdate(r);if(!r.done&&(r.mcts?.root_visits>0||r.source==='rule'||r.source==='tactical'||r.stop_reason)&&budgetReached(currentBudget(),r)){reached=true;inner.abort();}};
- try{return await retryAnalysis(()=>backend()==='local'?local.analyze(payload,update,{signal:inner.signal,continuous:true}):streamHost(payload,update,inner.signal),inner.signal);}
+ try{return await retryAnalysis(()=>local.analyze(payload,update,{signal:inner.signal,continuous:true}),inner.signal);}
  catch(error){if(reached&&last&&!signal?.aborted)return {...last,done:true};throw error;}
  finally{signal?.removeEventListener('abort',relay);}
 }
@@ -345,15 +342,16 @@ async function setTurnSide(side){
  if(!isReading()&&placeMode==='alternate')schedule();
 }
 
-async function startAnalysis({ai=false,kind=ai?'ai':'once',force=false,forceNonLeaf=false,forceMove=false}={}){
+async function startAnalysis({ai=false,kind=ai?'ai':'once',force=false,forceNonLeaf=false,forceMove=false,requestRawHeads=false}={}){
  if(!active()||moving||batching||!modelAvailable()||(ai&&!canAiPlay()))return;
  cancel();const node=active(),nodeKey=analysisKey(node),readingRef=reading,study=doc,model=doc.model_id,execution=backend(),token=controls.begin(nodeKey,model,execution),controller=new AbortController();analysisController=controller;analyzing=true;analysisKind=kind;
  if(force){node.analysis=null;shown.delete(nodeKey);}
  const side=node.position.side_to_move;
  const ponder=kind==='ponder',budget=ai?settings.play[side]:ponder?{unit:'none',value:null}:settings.analysisLimit;if(!ponder)render();else renderSettings();
+ const playOnly=!requestRawHeads&&(ponder||ai&&!settings.analysisPinned&&!controls.continuous[side]);
  const resolveBudget=ai?()=>settings.play[side]:ponder?()=>({unit:'none',value:null}):()=>settings.analysisLimit;
  const valid=()=>study===doc&&reading===readingRef&&controls.accepts(token,analysisKey(active()),doc.model_id,backend());let result;
- try{result=await search(node,budget,{force,resolveBudget,signal:controller.signal,onUpdate:r=>{if(valid()&&!ponder){acceptResult(r,node,model,execution);if(r.done||Date.now()-lastPaint>=180){lastPaint=Date.now();render();}}}});
+ try{result=await search(node,budget,{force,resolveBudget,playOnly,signal:controller.signal,onUpdate:r=>{if(valid()&&!ponder){acceptResult(r,node,model,execution);if(r.done||Date.now()-lastPaint>=180){lastPaint=Date.now();render();}}}});
  if(!valid())return;if(!ponder){acceptResult(result,node,model,execution);notice('');}
  }catch(error){if(error.name!=='AbortError'&&valid()&&!ponder)notice(error.message,true);return;}
  finally{analyzing=false;analysisKind=null;analysisController=null;if(valid()){if(!ponder)render();else renderSettings();}}
@@ -375,7 +373,7 @@ function schedule(){
   queueMicrotask(()=>run(()=>startAnalysis({kind:'pinned'})));
  }else if(controls.continuous[n.position.side_to_move]&&!budgetReached(settings.analysisLimit,nodeAnalysis(n))){
   queueMicrotask(()=>run(()=>startAnalysis({kind:'continuous'})));
- }else if(isLeaf&&!controls.aiTurn(n.position)&&controls.anyAI()&&settings.ponder&&backend()==='local'){
+ }else if(isLeaf&&!controls.aiTurn(n.position)&&controls.anyAI()&&settings.ponder){
   queueMicrotask(()=>run(()=>startAnalysis({kind:'ponder'})));
  }
 }
@@ -399,14 +397,7 @@ async function place(action,fromAI=false){
  cancel();const token=controls.epoch,study=doc;moving=true;
  render();
  try{
-  let next;
-  const fullPath=readingRef?[...pathTo(doc,readingRef.anchorId),...pathTo(readingRef.doc,node.id)]:pathTo(doc,node.id);
-  const canHostReplay=backend()==='host'&&!staticOnly&&action<=81&&fullPath.every(a=>a<=81);
-  if(canHostReplay){
-   next=await position({...positionRequest(node),actions:[...fullPath,action]});
-  }else{
-   next=await finalizePosition(makeNextPosition(node.position,action));
-  }
+  const next=await finalizePosition(makeNextPosition(node.position,action));
   if(study!==doc||reading!==readingRef||token!==controls.epoch)return;
   applyPinsOnNavigation();
   addNode(targetDoc,node.id,action,next);targetDoc.branch_leaf=resolveBranchLeaf(targetDoc,targetDoc.selected,targetDoc.branch_leaf);onceNode=null;
@@ -503,10 +494,8 @@ function renderBoard(){
  if($('nav-label'))$('nav-label').textContent=`${node.ply}수`;
  if($('first'))$('first').disabled=$('previous').disabled=onReading||node.parent===null;
  if($('next'))$('next').disabled=$('last').disabled=onReading||!nextInBranch(doc,node.id,doc.branch_leaf);
- const passCand=(L.policy&&visible&&!preview)?(visible.mcts?.candidates||[]).find(c=>c.action===81&&c.visits>0):null;
- const passOut=passCand?candidateOutcome(passCand,visible):null;
- const passShare=passCand?candidateShare(passCand,visible):0;
- if($('pass')){$('pass').disabled=Boolean(p.result||preview||moving||(!onReading&&controls.aiTurn(p))||(backend()==='local'&&!local)||placeMode!=='alternate');$('pass').textContent=passCand&&(passShare>=0.0005||passOut)?`패스 (${passOut==='win'?'필승 · ':passOut==='loss'?'필패 · ':''}${(passShare*100).toFixed(1)}%)`:'패스';}
+ const passDetail=L.policy&&visible&&!preview?passCandidateDetail(selectDisplayCandidates(visible),visible):'';
+ if($('pass')){$('pass').disabled=Boolean(p.result||preview||moving||(!onReading&&controls.aiTurn(p))||!local||placeMode!=='alternate');$('pass').textContent=passDetail?`패스 (${passDetail})`:'패스';}
  if($('preview-exit'))$('preview-exit').hidden=!preview;
  if($('preview-label'))$('preview-label').hidden=!(settings.layers.ownership&&visible);
 
@@ -620,7 +609,7 @@ function renderAnalysis(){
    const orbitNote=candidate.orbit_size>1?` · 대칭 ${candidate.orbit_size}`:'';
    const shareText=share>=0.0005?pct(share):(selection.mode==='forced_defense'?'유일':outcome==='win'?'필승':'전술');
    const visitText=candidate.visits>0?`${candidate.visits} visits`:(selection.mode==='forced_defense'?'유일 방어':analysis?.exact?.unique_win?'유일수':'즉시 판정');
-   button.innerHTML=`<span><span class="candidate-rank">${i+1}</span><span class="candidate-coordinate">${coord(candidate.action)}${provenTag}<small>모델 선호도 ${pct(analysis.raw_network?.policy[candidate.action])}</small></span></span><span>${shareText}<small>${visitText}${orbitNote}${gStageTag}</small>${diffLine}</span><span>${L.win?pct(probability):'—'}<small>Q ${signed(hasQ?(analysis.perspective==='first'?1:-1)*candidate.q:null)} · 덤 전 ${L.margin?signed(hasScore?(analysis.perspective==='first'?1:-1)*candidate.expected_score:null):'—'}집</small></span>${histHtml}`;
+   button.innerHTML=`<span><span class="candidate-rank">${i+1}</span><span class="candidate-coordinate">${coord(candidate.action)}${provenTag}<small>모델 선호도 ${pct(analysis.raw_network?.policy?.[candidate.action])}</small></span></span><span>${shareText}<small>${visitText}${orbitNote}${gStageTag}</small>${diffLine}</span><span>${L.win?pct(probability):'—'}<small>Q ${signed(hasQ?(analysis.perspective==='first'?1:-1)*candidate.q:null)} · 덤 전 ${L.margin?signed(hasScore?(analysis.perspective==='first'?1:-1)*candidate.expected_score:null):'—'}집</small></span>${histHtml}`;
    button.addEventListener('click',()=>run(()=>place(candidate.action)));$('candidates').append(button);
   });
  }
@@ -671,7 +660,7 @@ function renderSettings(){
  }
  if($('search-speed'))$('search-speed').textContent=vpsText;
  if($('search-status'))$('search-status').textContent=`${stateText}${stopInfo?` (${stopInfo.label})`:''} · ${visitsNum.toLocaleString()} visits · ${elapsedSec.toFixed(1)}초 · ${vpsText}`;
- if($('stat-backend'))$('stat-backend').textContent=stats?.backend?(stats.backend==='webgpu'?'WebGPU':`WASM (${stats.wasm_threads||1}스레드)`):(backend()==='local'?'초기화 중':'미사용');
+ if($('stat-backend'))$('stat-backend').textContent=stats?.backend?(stats.backend==='webgpu'?'WebGPU':`WASM (${stats.wasm_threads||1}스레드)`):'초기화 중';
  if($('stat-precision'))$('stat-precision').textContent=stats?.precision||'FP32 (비양자화)';
  if($('stat-cache')){
   if(stats){
@@ -872,14 +861,8 @@ function render(){if(!active()?.position)return;
 async function previewPV(count){
  const a=visibleAnalysis();if(!a||moving)return;
  const epoch=controls.epoch,node=active(),actions=a.mcts.principal_variation.slice(0,count);
- const fullPath=isReading()?[...pathTo(doc,reading.anchorId),...pathTo(reading.doc,node.id)]:pathTo(doc,node.id);
- let p;
- if(backend()==='host'&&!staticOnly&&fullPath.every(x=>x<=81)&&actions.every(x=>x<=81)){
-  p=await position({...positionRequest(),actions:[...fullPath,...actions]});
- }else{
-  p=node.position;
-  for(const act of actions){if(p.result)break;p=await finalizePosition(makeNextPosition(p,act));}
- }
+ let p=node.position;
+ for(const act of actions){if(p.result)break;p=await finalizePosition(makeNextPosition(p,act));}
  if(epoch!==controls.epoch)return;
  preview={position:p,actions};renderBoard();
 }
@@ -920,20 +903,18 @@ function populateModels(){
 }
 async function setupBackend(){
  cancel();controls.playing=false;backendReady=false;const requested=backend(),model=doc.model_id;render();
- try{if(requested==='local'){
- if(globalThis.isSecureContext===false)throw Error('기기 내 추론은 HTTPS 주소로 접속해 주세요. IP의 HTTP 주소에서는 Mac 계산을 사용할 수 있어요.');
+ try{
+ if(globalThis.isSecureContext===false)throw Error('기기 내 추론은 HTTPS 주소로 접속해 주세요. 로컬에서는 localhost 주소를 사용해 주세요.');
  if(!config?.browser_models?.includes(model))throw Error(staticOnly?'이 기보의 모델은 사이트에서 제외됐어요. 기보와 메모는 보존돼요. 사용 모델에서 세대 모델을 선택해 주세요.':'이 모델의 브라우저 실행 파일이 준비되지 않았어요. 사용법의 준비 명령을 실행해 주세요.');
  if($('runtime-note'))$('runtime-note').textContent='모델을 이 기기에 불러오는 중…';
- local?.close();local=new LocalEngine();localModel=null;const current=local,manifest=staticOnly?await loadStaticManifest(config,model):await api(`browser-model/${model}`),status=await current.initialize(manifest,progress=>{if(local!==current)return;if($('runtime-note'))$('runtime-note').textContent=({runtime:'실행 파일을 불러오는 중…',model:'모델을 기기에 내려받는 중…',session:'기기에서 모델을 준비하는 중…'}[progress.stage]||'기기 내 엔진 준비 중…');});
+ local?.close();local=new LocalEngine();localModel=null;const current=local,manifest=staticOnly?await loadStaticManifest(config,model):await assetJson(`browser-model/${model}`),status=await current.initialize(manifest,progress=>{if(local!==current)return;if($('runtime-note'))$('runtime-note').textContent=({runtime:'실행 파일을 불러오는 중…',model:'모델을 기기에 내려받는 중…',session:'기기에서 모델을 준비하는 중…'}[progress.stage]||'기기 내 엔진 준비 중…');});
  if(requested!==backend()||model!==doc.model_id||local!==current)return;
  localModel=model;lastRuntimeStats=status.stats||null;
  if($('runtime-note'))$('runtime-note').textContent=`서버 추론 미사용 · 브라우저 로컬 전용 · ${(status.execution_provider||status.backend||status.provider||'WebGPU / WASM').toUpperCase()}`;
- }else{if($('runtime-note'))$('runtime-note').textContent='연결된 Mac에서 계산';local?.close();local=null;localModel=null;}
- backendReady=true;if($('connection'))$('connection').textContent=requested==='local'?'기기 내 엔진 준비됨':`Mac ${config?.device?.toUpperCase?.()||'CPU'} 연결됨`;notice('');render();schedule();
+ backendReady=true;if($('connection'))$('connection').textContent='기기 내 엔진 준비됨';notice('');render();schedule();
  }catch(e){if(requested===backend()&&model===doc.model_id){backendReady=false;if($('connection'))$('connection').textContent='실행부 준비 실패';notice(e.message,true);render();}}
 }
 async function rebuildStudy(imported){
- if(backend()==='host')return api('validate-study',studyForSave(imported));
  const nodes=[];
  for(const n of imported.nodes){
   let p;
@@ -957,7 +938,7 @@ async function rebuildStudy(imported){
  }
  return {...imported,nodes};
 }
-async function loadStudy(value,{initializeModel=true,preserveCurrent=true}={}){const imported=importDocument(value);clearTimeout(saveTimer);if(preserveCurrent&&!saveNow())throw Error('현재 기보를 내보내기로 보관해 주세요.');cancel();controls.playing=false;forceAiUntilLeaf=false;const epoch=controls.epoch,rebuilt=await rebuildStudy(imported);if(epoch!==controls.epoch)return;reading=null;clearReadingShown();doc={...rebuilt,storage_id:value.storage_id||crypto.randomUUID()};doc.branch_leaf=resolveBranchLeaf(doc,doc.selected,doc.branch_leaf);placeMode='alternate';onceNode=null;shown.clear();populateModels();render();save();if(initializeModel&&backend()==='local'&&localModel!==doc.model_id)await setupBackend();else if(initializeModel)schedule();}
+async function loadStudy(value,{initializeModel=true,preserveCurrent=true}={}){const imported=importDocument(value);clearTimeout(saveTimer);if(preserveCurrent&&!saveNow())throw Error('현재 기보를 내보내기로 보관해 주세요.');cancel();controls.playing=false;forceAiUntilLeaf=false;const epoch=controls.epoch,rebuilt=await rebuildStudy(imported);if(epoch!==controls.epoch)return;reading=null;clearReadingShown();doc={...rebuilt,storage_id:value.storage_id||crypto.randomUUID()};doc.branch_leaf=resolveBranchLeaf(doc,doc.selected,doc.branch_leaf);placeMode='alternate';onceNode=null;shown.clear();populateModels();render();save();if(initializeModel&&localModel!==doc.model_id)await setupBackend();else if(initializeModel)schedule();}
 async function createGame(setup,{keepPlaceMode=false}={}){cancel();controls.playing=false;forceAiUntilLeaf=false;const epoch=controls.epoch,p=await position({ruleset_version:doc?.ruleset_version||'gk-v2.2',setup,actions:[]});if(epoch!==controls.epoch)return;clearTimeout(saveTimer);if(!saveNow())throw Error('현재 기보를 먼저 보관해 주세요.');const model=doc?.model_id||config?.models?.[0]?.id||null;reading=null;clearReadingShown();doc={...newStudy(setup,p),storage_id:crypto.randomUUID(),model_id:model};doc.branch_leaf=resolveBranchLeaf(doc,doc.selected,doc.branch_leaf);doc.title=`${new Date().toLocaleDateString('ko-KR',{month:'long',day:'numeric'})}의 연습`;if(!keepPlaceMode)placeMode='alternate';onceNode=null;shown.clear();if(placeMode==='alternate'&&controls.anyAI())controls.playing=true;populateModels();save();render();if($('new-dialog'))$('new-dialog').close();if(placeMode==='alternate')schedule();}
 function showNew(){if(!$('recent-studies'))return;$('recent-studies').replaceChildren();for(const entry of library()){const b=document.createElement('button');b.type='button';b.textContent=`${entry.title||'이름 없는 연습'} · ${entry.nodes.length}개 국면`;b.addEventListener('click',()=>run(async()=>{await loadStudy(entry);$('new-dialog').close();}));$('recent-studies').append(b);}$('new-dialog').showModal();}
 async function batch(){if(batching){cancel();render();return;}if(!modelAvailable())return;
@@ -992,14 +973,14 @@ $('analyze-button')?.addEventListener('click',()=>{
  onceNode=n.id;controls.visible=true;render();
  const aiTurn=currentAiTurn(n);
  if(aiTurn)controls.playing=true;
- run(()=>startAnalysis({ai:aiTurn,kind:aiTurn?'ai':'once',forceNonLeaf:aiTurn&&!isLeafNode(doc,n.id)}));
+ run(()=>startAnalysis({ai:aiTurn,kind:aiTurn?'ai':'once',requestRawHeads:true,forceNonLeaf:aiTurn&&!isLeafNode(doc,n.id)}));
 });
 $('reanalyze-button')?.addEventListener('click',()=>{
  const n=active();if(!n||moving||batching||!modelAvailable()||n.position?.result)return;
  cancel();
  onceNode=n.id;controls.visible=true;
  const aiTurn=currentAiTurn(n);
- run(()=>startAnalysis({ai:aiTurn,kind:aiTurn?'ai':'once',force:true,forceNonLeaf:aiTurn&&!isLeafNode(doc,n.id)}));
+ run(()=>startAnalysis({ai:aiTurn,kind:aiTurn?'ai':'once',requestRawHeads:true,force:true,forceNonLeaf:aiTurn&&!isLeafNode(doc,n.id)}));
 });
 $('once-auto-show')?.addEventListener('change',e=>{settings.onceAutoShow=e.target.checked;saveSettings();render();});
 for(const s of SIDES)$(`continuous-${s}`)?.addEventListener('change',e=>{
@@ -1277,24 +1258,20 @@ window.addEventListener('pagehide',()=>{saveNow();cancel();});document.addEventL
 run(async()=>{
  loadSettings();
  applyTheme();
- config=staticOnly?await loadStaticConfig():await api('config');
+ config=staticOnly?await loadStaticConfig():await assetJson('config');
  populateModels();
  if($('backend')){
-  if(staticOnly){
-   $('backend').replaceChildren(new Option('이 기기 · WebGPU / WASM','local'));
-   $('backend').value='local';
-   $('backend').disabled=true;
-  }
+  $('backend').replaceChildren(new Option('이 기기 · WebGPU / WASM','local'));
+  $('backend').value='local';
+  $('backend').disabled=true;
  }
- if(staticOnly){
-  local=new LocalEngine();
-  if($('connection'))$('connection').textContent='기기 내 규칙 엔진 준비 중';
- }else if($('connection'))$('connection').textContent=`Mac ${config?.device?.toUpperCase?.()||'CPU'} 연결됨`;
+ local=new LocalEngine();
+ if($('connection'))$('connection').textContent='기기 내 규칙 엔진 준비 중';
  const setup={neutral:[4,4],komi:2.5},p=await position({setup,actions:[]});
  doc={...newStudy(setup,p),storage_id:crypto.randomUUID(),model_id:config?.models?.[0]?.id||null};
  populateModels();
  let saved;try{saved=library()[0];}catch(e){notice(e.message,true);}
- if(saved){try{await loadStudy(saved,{initializeModel:!staticOnly,preserveCurrent:false});}catch(e){notice(`저장 기보를 복원하지 못했어요: ${e.message}`,true);render();}}
+ if(saved){try{await loadStudy(saved,{initializeModel:false,preserveCurrent:false});}catch(e){notice(`저장 기보를 복원하지 못했어요: ${e.message}`,true);render();}}
  else {render();save();}
- if(staticOnly)await setupBackend();
+ await setupBackend();
 });

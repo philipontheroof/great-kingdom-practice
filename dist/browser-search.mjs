@@ -76,6 +76,11 @@ export class BrowserSearch {
     if(t.status==='proven_loss')actions=f.legal_actions;
     if(t.status==='immediate_win')return {state,visits:0,value:0,evalValue:1,expectedScore:null,scoreDist:null,scoreMin:null,edges:actions.map(action=>({action,prior:1/actions.length,visits:0,value:0,expectedScore:null,expectedScoreCount:0,scoreDistSum:null,scoreDistCount:0,scoreMin:null,child:null})),tactical:t,provenWinner:winner,fullyExplored:false,expanded:true};
     if(!actions.length)return {state,visits:0,value:0,evalValue:-1,expectedScore:null,scoreDist:null,scoreMin:null,edges:[],tactical:t,provenWinner:winner,fullyExplored:true,expanded:true};
+    if(this.v6&&isRoot&&t.status==='must_defend'&&actions.length===1){
+      const edges=[{action:actions[0],prior:1,visits:0,value:0,child:null,expectedScore:null}];
+      return {state,visits:0,value:0,evalValue:null,expectedScore:null,scoreDist:null,scoreMin:null,edges,shared,
+        tactical:t,forcedDefense:true,provenWinner:null,fullyExplored:false,expanded:true};
+    }
     const input=!isRoot&&shared?shared.canonical:state;
     let raw=!isRoot&&shared?.entry.evaluation;
     if(!raw){
@@ -104,7 +109,7 @@ export class BrowserSearch {
     const evalValue=t.status==='proven_loss'?-1:raw.value;
     const scoreDist=Array.isArray(raw.score_distribution)&&raw.score_distribution.length?Float64Array.from(raw.score_distribution):null;
     const scoreMin=Number.isFinite(raw.score_min)?raw.score_min:null;
-    return {state,visits:0,value:0,evalValue,expectedScore:Number.isFinite(raw.expected_score)?raw.expected_score:null,scoreDist,scoreMin,edges,shared,tactical:t,forcedDefense:this.v6&&isRoot&&t.status==='must_defend'&&actions.length===1,provenWinner:winner,fullyExplored:false,expanded:true};
+    return {state,visits:0,value:0,evalValue,expectedScore:Number.isFinite(raw.expected_score)?raw.expected_score:null,scoreDist,scoreMin,edges,shared,tactical:t,provenWinner:winner,fullyExplored:false,expanded:true};
   }
   _provenTier(parent,edge,{respectBudget=false}={}){
     const pw=edge?.child?.provenWinner;
@@ -413,6 +418,7 @@ export class BrowserSearch {
   stopReason(){
     if(this.state.result)return 'terminal';
     if(this.root?.proof)return this.root.provenWinner===this.state.side_to_move?'proven_win':'proven_loss';
+    if(this.root?.forcedDefense)return 'forced_defense';
     if(!this.root||this.root.visits===0)return null;
     if(this.root.provenWinner===this.state.side_to_move&&(this._earlyStop||this.root.fullyExplored))return 'proven_win';
     if(this.root.fullyExplored){
@@ -428,7 +434,7 @@ export class BrowserSearch {
     if(this.state.result)return this.snapshot();
     if(!this.root){const root={state:this.state,visits:0,value:0,evalValue:0,expectedScore:null,edges:null,expanded:false,fullyExplored:false,provenWinner:null};Object.assign(root,await this._expand(this.state,true,this._expired));if(stopped())return this.snapshot();this.root=root;this.exact=this.root.tactical;this.source=this.exact.status==='immediate_win'?'tactical':'network';}
     if(this.root.proof){this.source='tactical';return this.snapshot();}
-    if(this.root.forcedDefense)return this.snapshot();
+    if(this.root.forcedDefense){this.source='tactical';return this.snapshot();}
     const target=this.rootVisits+visits;
     const initialRootVisits=this.rootVisits;
     if(this.searchMode==='gumbel'&&this.exact?.status!=='immediate_win'){
@@ -487,7 +493,10 @@ export class BrowserSearch {
     const useGumbel=this.searchMode==='gumbel'&&this.exact?.status!=='immediate_win'&&!this.root.proof&&!this.root.forcedDefense&&edges.length>0;
     const gumbelScores=useGumbel?(this._gumbelScores??this._updateGumbelScores(this._gumbel?.totalBudget??null)):null;
     const improvedPolicy=useGumbel?this._improvedPolicy(this.root,this._gumbel?.totalBudget??null):null;
-    const selectedAction=useGumbel?(this._gumbelSelectedAction??this._gumbel?.selectedAction??null):null;
+    const gumbelChoice=useGumbel?(this._gumbelSelectedAction??this._gumbel?.selectedAction??null):null;
+    const selectedEdge=edges.find(e=>e.action===gumbelChoice);
+    const selectionTier=selectedEdge?this._provenTier(this.root,selectedEdge):null;
+    const selectedAction=selectedEdge&&!edges.some(e=>this._provenTier(this.root,e)<selectionTier)?gumbelChoice:null;
     const statusMap=useGumbel?(this._gumbel?.statusByAction??null):null;
     const provenTier=(parent,edge)=>this._provenTier(parent,edge);
     const ordered=[...edges].sort((a,b)=>{
@@ -514,7 +523,8 @@ export class BrowserSearch {
       const edgeProvenWinner=e.child?.provenWinner??rootProofWinner??null;
       const q=edgeProvenWinner?winnerValue(this.state,edgeProvenWinner):e.visits?Math.max(-1,Math.min(1,e.value/e.visits)):null;
       const scoreDistribution=e.scoreDistSum&&e.scoreDistCount?Array.from(e.scoreDistSum,v=>v/e.scoreDistCount):null;
-      const gumbelStatus=useGumbel?(e.action===selectedAction?'selected':(statusMap?.get(e.action)??'unconsidered')):null;
+      const bracketStatus=statusMap?.get(e.action);
+      const gumbelStatus=useGumbel?(e.action===selectedAction?'selected':bracketStatus==='selected'?'finalist':bracketStatus??'unconsidered'):null;
       const members=e.orbitMembers&&e.orbitMembers.length>1?e.orbitMembers:[e.action];
       const k=members.length;
       const visitShare=(n?e.visits/n:0)/k;
@@ -524,27 +534,20 @@ export class BrowserSearch {
         candidates.push({action,prior:priorShare,visits:e.visits,visit_share:visitShare,improved_policy:impPol,gumbel_score:gumbelScores?(gumbelScores.get(e.action)??null):null,gumbel_status:gumbelStatus,orbit_size:k,orbit_rep:e.action,q,win_probability:q!==null?(q+1)/2:null,expected_score:e.visits?e.expectedScore??null:null,score_distribution:scoreDistribution,score_min:e.scoreMin??null,proven_winner:edgeProvenWinner,fully_explored:Boolean(e.child?.fullyExplored)});
       }
     }
-    let pv=[],node=this.root;
+    const winner=this.root.provenWinner??null;
+    const chosen=(useGumbel?candidates.find(c=>c.action===selectedAction):null)??candidates[0];
+    const pv=[];
+    let node=this.root;
     for(let i=0;i<40&&node?.edges?.length;i++){
-      const isRoot=node===this.root;
-      const edge=[...node.edges].sort((a,b)=>{
-        const ta=provenTier(node,a),tb=provenTier(node,b);
-        if(ta!==tb)return ta-tb;
-        if(isRoot&&useGumbel){
-          const sa=a.action===selectedAction?0:1,sb=b.action===selectedAction?0:1;
-          if(sa!==sb)return sa-sb;
-          const ga=gumbelScores?.get(a.action)??-Infinity,gb=gumbelScores?.get(b.action)??-Infinity;
-          if(ga!==gb)return gb-ga;
-        }
-        return b.visits-a.visits||a.action-b.action;
-      })[0];
-      if(!edge||!edge.visits)break;
+      const edge=i===0?edges.find(e=>e.action===chosen?.orbit_rep):[...node.edges].sort((a,b)=>
+        provenTier(node,a)-provenTier(node,b)||b.visits-a.visits||a.action-b.action)[0];
+      const provenWin=edge?.child?.provenWinner===node.state.side_to_move;
+      const forcedRoot=i===0&&(this.root.proof?.winner===this.state.side_to_move||this.root.forcedDefense);
+      if(!edge||(!edge.visits&&!provenWin&&!forcedRoot))break;
       pv.push(edge.action);node=edge.child;
     }
-    const winner=this.root.provenWinner??null;
-    const chosen=useGumbel?(candidates.find(c=>c.action===selectedAction)||candidates[0]):(candidates.find(c=>c.visits)||candidates[0]);
-    if(!pv.length&&chosen&&(this.root.proof?.winner===this.state.side_to_move||this.root.forcedDefense))pv=[chosen.action];
-    const rootEstimate=this.root.provenWinner&&this.v6?winnerValue(this.state,this.root.provenWinner):Math.max(-1,Math.min(1,n?this.root.value/n:this.root.evalValue));
-    return {source:this.source,search_mode:this.searchMode,proven_winner:winner,stop_reason:this.stopReason(),exact:{source:winner?'tactical':null,status:this.exact?.status??null,score_bounds:this.root.proof?.bounds??null,unique_win:this.root.proof?.unique??false,proven_winner:winner,threats:this.exact?.threats??[]},recommended_action:chosen?.action??null,mcts:{root_visits:n,root_win_probability:(rootEstimate+1)/2,fully_explored:Boolean(this.root?.fullyExplored),candidates,principal_variation:pv,elapsed_seconds:(now()-this.started)/1000}};
+    const estimate=winner&&this.v6?winnerValue(this.state,winner):n?this.root.value/n:this.root.evalValue;
+    const rootProbability=estimate===null?null:(Math.max(-1,Math.min(1,estimate))+1)/2;
+    return {source:this.source,search_mode:this.searchMode,proven_winner:winner,stop_reason:this.stopReason(),exact:{source:winner||this.root.forcedDefense?'tactical':null,status:this.exact?.status??null,score_bounds:this.root.proof?.bounds??null,unique_win:this.root.proof?.unique??false,proven_winner:winner,threats:this.exact?.threats??[]},recommended_action:chosen?.action??null,mcts:{root_visits:n,root_win_probability:rootProbability,fully_explored:Boolean(this.root?.fullyExplored),candidates,principal_variation:pv,elapsed_seconds:(now()-this.started)/1000}};
   }
 }

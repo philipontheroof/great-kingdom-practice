@@ -122,7 +122,7 @@ export function pickAiAction(result,temperature=0,rng=Math.random,options={}){
  const visited=candidates.filter(c=>c&&c.visits>0);
  const isGumbel=result?.search_mode==='gumbel';
  const rawPool=isGumbel?candidates.filter(c=>c&&(c.visits>0||(typeof c.improved_policy==='number'&&c.improved_policy>0))):visited;
- const winning=(rawPool.length?rawPool:candidates).filter(c=>isProvenWinCandidate(c,result));
+ const winning=candidates.filter(c=>isProvenWinCandidate(c,result));
  if(forceProvenWin){
    if(winning.length>0)return winning[0].action;
    if(result?.source==='tactical'||(result?.proven_winner&&(!result?.perspective||result.proven_winner===result.perspective)))return bestAction;
