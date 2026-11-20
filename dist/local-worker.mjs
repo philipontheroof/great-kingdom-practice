@@ -1,6 +1,6 @@
 import {RULESET,canonicalD4State,legalActions,features,positionPayload,replayPosition,canonicalState,sampleD4Orientations,averageD4Evaluations,inverseTransformEvaluation} from './engine.mjs?v=28';
-import {BrowserSearch} from './browser-search.mjs?v=28';
-import {decodeNetworkHeads} from './local-client.mjs?v=28';
+import {BrowserSearch} from './browser-search.mjs?v=29';
+import {decodeNetworkHeads} from './local-client.mjs?v=29';
 
 let ort=null,session=null,manifest=null,backend=null,generation=0,modelCacheSource='network',rawCacheHits=0,rawCacheMisses=0;
 const rawCache=new Map(),treeCache=new Map(),MAX_RAW_CACHE=1024,MAX_TREE_CACHE=24;
@@ -177,7 +177,9 @@ async function analyze(id,payload,options,runGeneration){
   do{
     if(runGeneration!==generation)throw new DOMException('Analysis cancelled','AbortError');
     const remaining=maxVisits-search.rootVisits;
-    const stepVisits=continuous?Math.max(0,Math.min(chunkSize,remaining)):Math.max(0,Math.min(chunkSize,visits-search.rootVisits));
+    const minInit=search.root?1:2;
+    const targetStep=Math.max(chunkSize,minInit);
+    const stepVisits=continuous?Math.max(0,Math.min(targetStep,remaining)):Math.max(0,Math.min(targetStep,visits-search.rootVisits));
     snapshot=await search.advance(stepVisits,{deadline:continuous?continuousDeadline:deadline,stopped:()=>runGeneration!==generation,earlyStop,gumbelBudget});
     const earlyDone=(earlyStop||Boolean(search.root?.proof))&&search.shouldStopEarly();
     const done=earlyDone||(!continuous?(snapshot.mcts.root_visits>=visits||performance.now()>=deadline):(snapshot.mcts.root_visits>=maxVisits||performance.now()>=continuousDeadline));

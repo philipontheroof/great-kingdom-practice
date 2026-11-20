@@ -26,7 +26,7 @@ export function decodeNetworkHeads(outputs,{legalActions,scoreMin}){
 }
 
 export class LocalEngine {
-  constructor({workerUrl=new URL('./local-worker.mjs?v=28',import.meta.url)}={}){
+  constructor({workerUrl=new URL('./local-worker.mjs?v=29',import.meta.url)}={}){
     this.worker=new Worker(workerUrl,{type:'module'});this.nextId=1;this.pending=new Map();this.closed=false;
     this.worker.onmessage=event=>{const {id,type,value}=event.data||{},entry=this.pending.get(id);if(!entry)return;
       if(type==='update'){entry.onUpdate?.(value);return;}

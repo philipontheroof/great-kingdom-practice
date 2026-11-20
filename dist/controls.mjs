@@ -69,6 +69,12 @@ export function budgetPayload(budget){
  return budget.unit==='visits'?{max_visits:budget.value}:budget.unit==='seconds'?{max_seconds:budget.value}:{};
 }
 
+export function searchRequestBudget(budget){
+ const normalized=normalizeBudget(budget,{allowNone:true,fallback:'seconds'});
+ const oneShotSeconds=normalized.unit==='seconds'?Math.min(10,Math.max(0.05,normalized.value)):2;
+ return {visits:1600,seconds:oneShotSeconds,continuous:true,...budgetPayload(normalized)};
+}
+
 export function budgetReached(budget,analysis){
  if(!analysis)return false;
  if(analysis.source==='rule'||['proven_win','proven_loss','fully_explored','terminal'].includes(analysis.stop_reason))return true;

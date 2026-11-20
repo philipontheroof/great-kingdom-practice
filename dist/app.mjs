@@ -1,10 +1,10 @@
 import {newStudy,addNode,pathTo,lineThrough,importDocument,blueEvaluation,studyForSave,resolveBranchLeaf,nextInBranch,branchLeaves,FORMAT} from './study.mjs?v=25';
 import {facts,stateGroups,territory,canonicalState,positionPayload} from './engine.mjs?v=28';
-import {boardSvg,candidateOutcome,candidateShare} from './board.mjs?v=27';
+import {boardSvg,candidateOutcome,candidateShare,selectDisplayCandidates} from './board.mjs?v=30';
 import {STORE,persistStudy,retryAnalysis} from './client.mjs?v=25';
-import {PracticeControls,missingNodes,normalizeBudget,analysisFloor,budgetPayload,budgetReached,budgetLabel,BUDGET_RANGE,BUDGET_DEFAULT,TEMPERATURE_DEFAULT,normalizeTemperature,pickAiAction} from './controls.mjs?v=25';
+import {PracticeControls,missingNodes,normalizeBudget,analysisFloor,budgetPayload,searchRequestBudget,budgetReached,budgetLabel,BUDGET_RANGE,BUDGET_DEFAULT,TEMPERATURE_DEFAULT,normalizeTemperature,pickAiAction} from './controls.mjs?v=26';
 import {timelineSvg} from './timeline.mjs?v=25';
-import {LocalEngine} from './local-client.mjs?v=28';
+import {LocalEngine} from './local-client.mjs?v=29';
 import {loadStaticConfig,loadStaticManifest} from './deployment.mjs?v=25';
 const staticOnly=document.documentElement?.dataset?.execution==='local';
 
@@ -170,7 +170,7 @@ async function streamHost(payload,onUpdate,signal){
 async function search(node,budget,{onUpdate=()=>{},signal,force=false,resolveBudget=null}={}){
  const currentBudget=()=>resolveBudget?resolveBudget():budget;
  const b0=currentBudget();
- const payload={...positionRequest(node),model_id:doc.model_id,search_mode:settings.searchMode,d4_samples:settings.d4Samples,visits:1600,seconds:b0.unit==='seconds'?b0.value:2,continuous:true,...budgetPayload(b0),...(force?{force:true}:{})};
+ const payload={...positionRequest(node),model_id:doc.model_id,search_mode:settings.searchMode,d4_samples:settings.d4Samples,...searchRequestBudget(b0),...(force?{force:true}:{})};
  if(backend()==='host')delete payload.max_seconds;
  const inner=new AbortController(),relay=()=>inner.abort();signal?.addEventListener('abort',relay,{once:true});
  let last=null,reached=false;
@@ -457,6 +457,14 @@ function renderPlacementBar(){
  }
  renderReadingBar();
 }
+function renderWinColumn(values,showWin){
+ if($('win-column'))$('win-column').hidden=!showWin;
+ if($('win-value'))$('win-value').textContent=pct(values.win);
+ if($('win-summary-value'))$('win-summary-value').textContent=pct(values.win);
+ if($('blue-percent'))$('blue-percent').textContent=pct(values.win);
+ if($('red-percent'))$('red-percent').textContent=pct(values.win===null?null:1-values.win);
+ if($('win-fill')){$('win-fill').style.height=values.win===null?'0%':`${values.win*100}%`;if($('win-fill').parentElement)$('win-fill').parentElement.style.background=values.win===null?'#f1f5f9':'';}
+}
 function renderBoard(){
  const node=active(),p=preview?.position||node.position,visible=visibleAnalysis(),L=settings.layers;
  const onReading=isReading();
@@ -498,18 +506,13 @@ function renderBoard(){
  const passCand=(L.policy&&visible&&!preview)?(visible.mcts?.candidates||[]).find(c=>c.action===81&&c.visits>0):null;
  const passOut=passCand?candidateOutcome(passCand,visible):null;
  const passShare=passCand?candidateShare(passCand,visible):0;
- if($('pass')){$('pass').disabled=Boolean(p.result||preview||moving||(!onReading&&controls.aiTurn(p))||(backend()==='local'&&!local)||placeMode!=='alternate');$('pass').textContent=passCand?`패스 (${passOut==='win'?'필승 · ':passOut==='loss'?'필패 · ':''}${(passShare*100).toFixed(1)}%)`:'패스';}
+ if($('pass')){$('pass').disabled=Boolean(p.result||preview||moving||(!onReading&&controls.aiTurn(p))||(backend()==='local'&&!local)||placeMode!=='alternate');$('pass').textContent=passCand&&(passShare>=0.0005||passOut)?`패스 (${passOut==='win'?'필승 · ':passOut==='loss'?'필패 · ':''}${(passShare*100).toFixed(1)}%)`:'패스';}
  if($('preview-exit'))$('preview-exit').hidden=!preview;
  if($('preview-label'))$('preview-label').hidden=!(settings.layers.ownership&&visible);
 
  // Left: Winrate vertical bar (Blue on top, Red on bottom)
  const values=blueEvaluation(visible,doc.setup.komi);
- if($('win-column'))$('win-column').hidden=!L.win;
- if($('win-value'))$('win-value').textContent=pct(values.win);
- if($('win-summary-value'))$('win-summary-value').textContent=pct(values.win);
- if($('blue-percent'))$('blue-percent').textContent=pct(values.win);
- if($('red-percent'))$('red-percent').textContent=pct(values.win===null?null:1-values.win);
- if($('win-fill')){$('win-fill').style.height=values.win===null?'0%':`${values.win*100}%`;if($('win-fill').parentElement)$('win-fill').parentElement.style.background=values.win===null?'#f1f5f9':'';}
+ renderWinColumn(values,L.win);
 
  // Right: Expected score difference (집차이) vertical bar
  if($('margin-column'))$('margin-column').hidden=!L.margin;
@@ -550,12 +553,7 @@ function renderAnalysis(){
  if($('result-empty'))$('result-empty').hidden=Boolean(analysis);
  if($('result-body'))$('result-body').hidden=!analysis;
  if($('result-empty'))$('result-empty').textContent=!doc.model_id?'모델이 연결되지 않았어요. 양쪽 성을 직접 두며 국면을 살펴볼 수 있어요.':active().position.result?'대국이 종료되었어요. 이전 수로 돌아가 새 가지를 만들어 보세요.':'이 국면은 아직 분석 전이에요. [현재 국면 분석]을 누르거나 [📌 분석 고정]을 켜면 바로 분석돼요.';
- if($('win-column'))$('win-column').hidden=!L.win;
- if($('win-value'))$('win-value').textContent=pct(values.win);
- if($('win-summary-value'))$('win-summary-value').textContent=pct(values.win);
- if($('blue-percent'))$('blue-percent').textContent=pct(values.win);
- if($('red-percent'))$('red-percent').textContent=pct(values.win===null?null:1-values.win);
- if($('win-fill')){$('win-fill').style.height=values.win===null?'0%':`${values.win*100}%`;if($('win-fill').parentElement)$('win-fill').parentElement.style.background=values.win===null?'#f1f5f9':'';}
+ renderWinColumn(values,L.win);
  if($('margin-box'))$('margin-box').hidden=!L.margin;
  if($('margin-caption'))$('margin-caption').textContent=analysis?.source==='rule'?'종국 영토 차이':'예상 집차이';
  if($('margin-value'))$('margin-value').textContent=values.margin===null?'—':`${signed(values.margin)}집`;
@@ -591,22 +589,28 @@ function renderAnalysis(){
   const expectedText=blueExpected===null?'—':`${signed(blueExpected)}집`;
   return `<div class="candidate-hist-wrap"><div class="candidate-hist-meta"><span>MCTS 경로 예상 집차이 분포 (x: 집차이 · y: 확률)</span><span>평균 ${expectedText}</span></div><svg class="candidate-hist-svg" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" role="img" aria-label="후보수 예상 집차이 분포">${zeroLine}${bars}<line x1="0" y1="${h-2}" x2="${w}" y2="${h-2}" stroke="#cbd5e1" stroke-width="0.6"/></svg></div>`;
  }
- const rawCandidates=analysis?.mcts?.candidates||[];
- const visitedCandidates=rawCandidates.filter(c=>c.visits>0);
- const candidates=(visitedCandidates.length?visitedCandidates:rawCandidates).slice(0,8);
- if($('candidate-count'))$('candidate-count').textContent=candidates.length?`${visitedCandidates.length||rawCandidates.length}개 후보`:'상위 후보';
+ const selection=selectDisplayCandidates(analysis);
+ const candidates=selection.visible.slice(0,8);
+ if($('candidate-count'))$('candidate-count').textContent=selection.mode==='visited'?`${selection.visible.length}개 후보`:selection.mode==='tactical_win'?'전술 필승':selection.mode==='forced_defense'?'유일 방어':'상위 후보';
  if($('candidates')){
   $('candidates').replaceChildren();
-  if(!candidates.length){const p=document.createElement('p');p.className='empty-state';p.textContent='이 국면의 후보수가 없어요.';$('candidates').append(p);}
+  if(!candidates.length){
+   const p=document.createElement('p');p.className='empty-state';
+   p.textContent=selection.mode==='proven_loss'?'전술 판정: 모든 합법수가 필패입니다.':selection.mode==='pending'?'탐색 후보를 계산하고 있어요.':'이 국면의 후보수가 없어요.';
+   $('candidates').append(p);
+  }
   const best=candidates[0]||null;
   const sharedHistMax=candidates.reduce((mx,c)=>Array.isArray(c.score_distribution)?Math.max(mx,...c.score_distribution):mx,0.0001);
   candidates.forEach((candidate,i)=>{
    const outcome=candidateOutcome(candidate,analysis);
    const share=candidateShare(candidate,analysis);
    const button=document.createElement('button');button.className=`candidate-row${outcome==='win'?' proven-win':outcome==='loss'?' proven-loss':''}`;
-   const probability=candidate.win_probability===null?null:analysis.perspective==='first'?candidate.win_probability:1-candidate.win_probability;
-   const scoreDiff=(i>0&&candidate.expected_score!==null&&best?.expected_score!==null)?(candidate.expected_score-best.expected_score):null;
-   const winDiffPp=(i>0&&candidate.win_probability!==null&&best?.win_probability!==null)?((candidate.win_probability-best.win_probability)*100):null;
+   const hasWin=Number.isFinite(candidate.win_probability);
+   const hasQ=Number.isFinite(candidate.q);
+   const hasScore=Number.isFinite(candidate.expected_score);
+   const probability=hasWin?(analysis.perspective==='first'?candidate.win_probability:1-candidate.win_probability):null;
+   const scoreDiff=(i>0&&hasScore&&Number.isFinite(best?.expected_score))?(candidate.expected_score-best.expected_score):null;
+   const winDiffPp=(i>0&&hasWin&&Number.isFinite(best?.win_probability))?((candidate.win_probability-best.win_probability)*100):null;
    const diffLine=(i>0&&(scoreDiff!==null||winDiffPp!==null))?`<small class="candidate-diff">1순위 대비 ${scoreDiff!==null?`${signed(scoreDiff)}집`:'—'} · ${winDiffPp!==null?`${signed(winDiffPp)}%p`:'—'}</small>`:'';
    const provenTag=outcome==='win'?'<span class="proven-badge win">필승</span>':outcome==='loss'?'<span class="proven-badge loss">필패</span>':'';
    const gStageMap={selected:['1순위','selected'],finalist:['결선',''],active:['진행',''],eliminated:['탈락','eliminated'],unconsidered:['후보외','eliminated']};
@@ -614,7 +618,9 @@ function renderAnalysis(){
    const gStageTag=gInfo?`<span class="gumbel-stage-badge${gInfo[1]?` ${gInfo[1]}`:''}">${gInfo[0]}</span>`:'';
    const histHtml=L.margin?candidateHistogramSvg(candidate,sharedHistMax,analysis.raw_network?.score_min,analysis.perspective==='first'):'';
    const orbitNote=candidate.orbit_size>1?` · 대칭 ${candidate.orbit_size}`:'';
-   button.innerHTML=`<span><span class="candidate-rank">${i+1}</span><span class="candidate-coordinate">${coord(candidate.action)}${provenTag}<small>모델 선호도 ${pct(analysis.raw_network?.policy[candidate.action])}</small></span></span><span>${pct(share)}<small>${candidate.visits} visits${orbitNote}${gStageTag}</small>${diffLine}</span><span>${L.win?pct(probability):'—'}<small>Q ${signed(candidate.q===null?null:(analysis.perspective==='first'?1:-1)*candidate.q)} · 덤 전 ${L.margin?signed(candidate.expected_score===null?null:(analysis.perspective==='first'?1:-1)*candidate.expected_score):'—'}집</small></span>${histHtml}`;
+   const shareText=share>=0.0005?pct(share):(selection.mode==='forced_defense'?'유일':outcome==='win'?'필승':'전술');
+   const visitText=candidate.visits>0?`${candidate.visits} visits`:(selection.mode==='forced_defense'?'유일 방어':analysis?.exact?.unique_win?'유일수':'즉시 판정');
+   button.innerHTML=`<span><span class="candidate-rank">${i+1}</span><span class="candidate-coordinate">${coord(candidate.action)}${provenTag}<small>모델 선호도 ${pct(analysis.raw_network?.policy[candidate.action])}</small></span></span><span>${shareText}<small>${visitText}${orbitNote}${gStageTag}</small>${diffLine}</span><span>${L.win?pct(probability):'—'}<small>Q ${signed(hasQ?(analysis.perspective==='first'?1:-1)*candidate.q:null)} · 덤 전 ${L.margin?signed(hasScore?(analysis.perspective==='first'?1:-1)*candidate.expected_score:null):'—'}집</small></span>${histHtml}`;
    button.addEventListener('click',()=>run(()=>place(candidate.action)));$('candidates').append(button);
   });
  }
@@ -958,7 +964,8 @@ async function batch(){if(batching){cancel();render();return;}if(!modelAvailable
  cancel();controls.playing=false;
  const scope=$('batch-scope')?.value||settings.batch.scope;
  const target=$('batch-target')?.value||settings.batch.target;
- const budget=$('batch-value')?.value?settings.batch.budget:{unit:'visits',value:Number($('batch-visits')?.value||160)};
+ const budget=$('batch-value')?.value?readBudget('batch',settings.batch.budget,{fallback:'seconds'}):{unit:'visits',value:Number($('batch-visits')?.value||160)};
+ settings.batch.budget=budget;
  const nodes=missingNodes(doc,scope,backend(),target);
  const study=doc,model=doc.model_id,execution=backend(),epoch=controls.epoch,controller=new AbortController();
  analysisController=controller;batching=true;controls.visible=true;capture();let completed=0;render();

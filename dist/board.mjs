@@ -13,7 +13,8 @@ export function tileLayers(position,index,prediction=null) {
 export function candidateOutcome(candidate,analysis=null) {
   if(!candidate)return null;
   if(candidate.proven_winner&&analysis?.perspective)return candidate.proven_winner===analysis.perspective?'win':'loss';
-  if(analysis?.exact?.status==='immediate_win'&&candidate.visits>0)return 'win';
+  if(analysis?.exact?.status==='immediate_win'&&(candidate.visits>0||analysis?.source==='tactical'))return 'win';
+  if(analysis?.source==='tactical'&&analysis?.proven_winner&&analysis?.perspective&&analysis.proven_winner===analysis.perspective&&candidate.action===analysis.recommended_action)return 'win';
   if(candidate.q===1)return 'win';
   if(candidate.visits>0&&candidate.q===-1)return 'loss';
   return null;
@@ -25,6 +26,41 @@ export function candidateShare(candidate,analysis=null) {
     return candidate.improved_policy;
   }
   return typeof candidate.visit_share==='number'&&Number.isFinite(candidate.visit_share)?candidate.visit_share:0;
+}
+
+export function selectDisplayCandidates(analysis=null) {
+  const raw=analysis?.mcts?.candidates||[];
+  const visited=raw.filter(c=>c&&c.visits>0);
+  const visible=visited.filter(c=>candidateShare(c,analysis)>=0.0005||candidateOutcome(c,analysis)==='win');
+  const boardVisible=visited.filter(c=>candidateShare(c,analysis)>=0.0005);
+  const passVisited=visited.find(c=>c.action===81&&(candidateShare(c,analysis)>=0.0005||candidateOutcome(c,analysis)!==null))??null;
+  if(visited.length){
+    return {raw,visited,visible,boardVisible,passCandidate:passVisited,tacticalFallback:false,mode:'visited'};
+  }
+  if(!analysis||analysis.source==='rule'||!raw.length){
+    return {raw,visited,visible:[],boardVisible:[],passCandidate:null,tacticalFallback:false,mode:analysis?.source==='rule'?'terminal':'empty'};
+  }
+  const status=analysis.exact?.status;
+  if(status==='proven_loss'){
+    return {raw,visited,visible:[],boardVisible:[],passCandidate:null,tacticalFallback:false,mode:'proven_loss'};
+  }
+  const rec=analysis.recommended_action;
+  const isWin=analysis.source==='tactical'||status==='immediate_win'||Boolean(analysis.proven_winner&&analysis.proven_winner===analysis.perspective);
+  if(isWin){
+    const winning=raw.filter(c=>candidateOutcome(c,analysis)==='win');
+    const pool=winning.length?winning:(rec!==null&&rec!==undefined?raw.filter(c=>c.action===rec):[]);
+    const selected=pool.length<=8?pool:pool.filter(c=>c.action===rec).slice(0,1);
+    const finalPool=selected.length?selected:pool.slice(0,1);
+    const passWin=pool.find(c=>c.action===81)||null;
+    return {raw,visited,visible:finalPool,boardVisible:[],passCandidate:passWin,tacticalFallback:true,mode:'tactical_win'};
+  }
+  if(status==='must_defend'&&rec!==null&&rec!==undefined){
+    const fc=raw.find(c=>c.action===rec);
+    if(fc){
+      return {raw,visited,visible:[fc],boardVisible:[],passCandidate:rec===81?fc:null,tacticalFallback:true,mode:'forced_defense'};
+    }
+  }
+  return {raw,visited,visible:[],boardVisible:[],passCandidate:null,tacticalFallback:false,mode:'pending'};
 }
 
 export function candidateRadius(share,maxShare,{hasProven=false,hasOwnership=false}={}){
@@ -51,8 +87,11 @@ export function boardSvg(position,{actions=[],lastAction=null,analysis=null,show
   });
   const lastCell=(lastAction===null||lastAction===81)?null:(lastAction>=400?null:(lastAction>=100?(lastAction%100):lastAction));
   const isGumbel=analysis?.search_mode==='gumbel';
-  const allVisited=(analysis?.mcts?.candidates||[]).filter(c=>c.visits>0);
-  const nonPassVisited=allVisited.filter(c=>c.action!==81);
+  const selection=selectDisplayCandidates(analysis);
+  const allCandidates=selection.raw;
+  const allVisited=selection.visited;
+  const visibleCandidates=selection.boardVisible;
+  const nonPassVisited=visibleCandidates.filter(c=>c.action!==81);
   const candidates=nonPassVisited.slice(0,8);
   if(nonPassVisited.length>8&&nonPassVisited[7]?.orbit_size>1){
     const rep=nonPassVisited[7].orbit_rep;
@@ -62,14 +101,22 @@ export function boardSvg(position,{actions=[],lastAction=null,analysis=null,show
     }
   }
   const maxShare=candidates.reduce((mx,c)=>Math.max(mx,candidateShare(c,analysis)),0)||1;
-  const passCandidate=showCandidates?allVisited.find(c=>c.action===81):null;
-  const passIsBest=Boolean(passCandidate&&allVisited[0]?.action===81);
-  const ranks=new Map(candidates.map((c,i)=>[c.action,{...c,rank:i+1,isBest:allVisited[0]?.action===c.action}]));
+  const passCandidate=showCandidates?selection.passCandidate:null;
+  const bestCandidate=visibleCandidates[0]||allVisited[0]||null;
+  const passIsBest=Boolean(passCandidate&&bestCandidate?.action===81);
+  const ranks=new Map(candidates.map((c,i)=>[c.action,{...c,rank:i+1,isBest:bestCandidate?.action===c.action}]));
   const extraProven=new Map();
   if(showCandidates){
     for(const c of allVisited){
       if(c.action!==81&&!ranks.has(c.action)&&candidateOutcome(c,analysis)!==null){
         extraProven.set(c.action,c);
+      }
+    }
+    if(selection.tacticalFallback){
+      for(const c of selection.visible){
+        if(c.action!==81&&!ranks.has(c.action)&&!extraProven.has(c.action)){
+          extraProven.set(c.action,selection.mode==='forced_defense'?{...c,forcedUnique:true}:c);
+        }
       }
     }
   }
@@ -139,9 +186,11 @@ export function boardSvg(position,{actions=[],lastAction=null,analysis=null,show
         svg+=`<text class="candidate-number${isGumbel?' gumbel':''}" style="font-size:${numSize}px" x="${x}" y="${cy}">${(share*100).toFixed(1)}%</text>`;
       }
     } else if(showCandidates&&(extra||isTacticalPrunedLoss(i))) {
-      const outcome=extra?candidateOutcome(extra,analysis):'loss';
+      const isForced=Boolean(extra?.forcedUnique);
+      const outcome=isForced?'win':(extra?candidateOutcome(extra,analysis):'loss');
+      const label=isForced?'유일':(outcome==='win'?'필승':'필패');
       const cy=y-(tile.predictedOwner?5:0);
-      svg+=`<circle cx="${x}" cy="${cy}" r="15" class="candidate-dot compact ${outcome==='win'?'proven-win':'proven-loss'}"/><text class="candidate-proven compact ${outcome}" x="${x}" y="${cy}">${outcome==='win'?'필승':'필패'}</text>`;
+      svg+=`<circle cx="${x}" cy="${cy}" r="15" class="candidate-dot compact ${outcome==='win'?'proven-win':'proven-loss'}"/><text class="candidate-proven compact ${outcome}" x="${x}" y="${cy}">${label}</text>`;
     }
     if(pvMap.has(i)) {
       const pv=pvMap.get(i);
@@ -157,14 +206,15 @@ export function boardSvg(position,{actions=[],lastAction=null,analysis=null,show
   }
   const showTacticalPassLoss=!passCandidate&&isTacticalPrunedLoss(81);
   if(passCandidate||showTacticalPassLoss){
-    const passOutcome=passCandidate?candidateOutcome(passCandidate,analysis):'loss';
+    const isForcedPass=Boolean(passCandidate&&selection.mode==='forced_defense');
+    const passOutcome=isForcedPass?'win':(passCandidate?candidateOutcome(passCandidate,analysis):'loss');
     const passShare=passCandidate?candidateShare(passCandidate,analysis):0;
-    const label=passCandidate?`${passOutcome==='win'?'패스 필승':passOutcome==='loss'?'패스 필패':'패스'} ${(passShare*100).toFixed(1)}%`:'패스 필패';
+    const label=isForcedPass?'패스 유일':passCandidate?(passShare>=0.0005?`${passOutcome==='win'?'패스 필승':passOutcome==='loss'?'패스 필패':'패스'} ${(passShare*100).toFixed(1)}%`:(passOutcome==='win'?'패스 필승':passOutcome==='loss'?'패스 필패':'패스')):'패스 필패';
     const w=passCandidate?(passOutcome?148:128):96,rx=580-w;
     const fill=passOutcome==='win'?'#15803d':passOutcome==='loss'?'#fee2e2':passIsBest?(isGumbel?'#4f46e5':'#327967'):(isGumbel?'#eef2ff':'#e0ece8');
     const stroke=passOutcome==='win'?'#fbbf24':passOutcome==='loss'?'#ef4444':passIsBest?(isGumbel?'#4338ca':'#327967'):(isGumbel?'#a5b4fc':'#b5cec4');
     const textFill=passOutcome==='win'?'#ffffff':passOutcome==='loss'?'#b91c1c':passIsBest?'#ffffff':(isGumbel?'#3730a3':'#2c5646');
-    const ariaLabel=passCandidate?`패스 착수 비중 ${(passShare*100).toFixed(1)}%${passOutcome==='win'?' 필승':passOutcome==='loss'?' 필패':''}`:'패스 필패';
+    const ariaLabel=passCandidate?(passShare>=0.0005?`패스 착수 비중 ${(passShare*100).toFixed(1)}%${passOutcome==='win'?' 필승':passOutcome==='loss'?' 필패':''}`:label):'패스 필패';
     svg+=`<g class="pass-candidate-badge${passOutcome==='win'?' proven-win':passOutcome==='loss'?' proven-loss':''}" pointer-events="none" aria-label="${ariaLabel}"><rect x="${rx}" y="575" width="${w}" height="24" rx="12" fill="${fill}" stroke="${stroke}" stroke-width="1.5" filter="url(#castleShadow)"/><text x="${rx+w/2}" y="587" text-anchor="middle" dominant-baseline="central" fill="${textFill}" font-size="11" font-weight="750">${label}</text></g>`;
   }
   return svg+'</svg>';
