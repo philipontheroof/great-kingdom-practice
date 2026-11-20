@@ -1,4 +1,4 @@
-import {canonicalState,facts,moveOrbits,playAction,positionPayload,stateStabilizer} from './engine.mjs?v=25';
+import {canonicalD4State,canonicalState,endgameProof,facts,inverseTransformEvaluation,moveOrbits,playAction,positionPayload,stateStabilizer,transformAction} from './engine.mjs?v=28';
 const now=()=>globalThis.performance?.now?.()??Date.now();
 const opponent=p=>p==='first'?'second':'first';
 const winnerValue=(state,winner)=>state.side_to_move===winner?1:-1;
@@ -21,7 +21,7 @@ function flipScoreDistribution(dist,scoreMin){
 }
 
 export class BrowserSearch {
-  constructor(state,evaluateAsync,{cPuct=1.5,searchMode='puct',gumbelMaxConsidered=16,gumbelCVisit=50,gumbelCScale=1,rootSymmetryQuotient=false}={}) {
+  constructor(state,evaluateAsync,{cPuct=1.5,searchMode='puct',gumbelMaxConsidered=16,gumbelCVisit=50,gumbelCScale=1,rootSymmetryQuotient=false,v6=false}={}) {
     if(typeof evaluateAsync!=='function')throw new TypeError('evaluateAsync must be a function');
     if(!Number.isFinite(cPuct)||cPuct<=0)throw new RangeError('cPuct must be positive');
     if(searchMode!=='puct'&&searchMode!=='gumbel')throw new RangeError('searchMode must be "puct" or "gumbel"');
@@ -31,22 +31,58 @@ export class BrowserSearch {
     this.state=state;this.evaluateAsync=evaluateAsync;this.cPuct=cPuct;
     this.searchMode=searchMode;this.gumbelMaxConsidered=gumbelMaxConsidered;
     this.gumbelCVisit=gumbelCVisit;this.gumbelCScale=gumbelCScale;
+    this.v6=v6;
+    this.shared=v6?new Map():null;
+    this.shareD4=v6&&stateStabilizer(state).length>1;
     this.rootSymmetryQuotient=Boolean(rootSymmetryQuotient);
     this.started=now();this.rootVisits=0;this.root=null;this.raw=null;this.exact=null;
     this.source=state.result?'rule':null;this._earlyStop=false;
     this._gumbel=null;this._gumbelScores=null;this._gumbelSelectedAction=null;
   }
-  async _expand(state,isRoot=false){
+  _sharedPosition(state){
+    if(!this.shared)return null;
+    const {state:canonical,sym}=this.shareD4?canonicalD4State(state):{state,sym:0};
+    const key=canonicalState(canonical);
+    const entry=this.shared.get(key)??{actions:new Map(),winner:null,evaluation:null};
+    this.shared.delete(key);
+    this.shared.set(key,entry);
+    if(this.shared.size>4096)this.shared.delete(this.shared.keys().next().value);
+    return {entry,sym,canonical};
+  }
+  async _expand(state,isRoot=false,expired=()=>false){
+    const shared=this._sharedPosition(state);
+    const known=!isRoot&&shared?.entry.winner;
+    if(known){
+      return {state,visits:0,value:0,evalValue:winnerValue(state,known),expectedScore:null,scoreDist:null,scoreMin:null,
+        edges:[],shared,provenWinner:known,fullyExplored:true,expanded:true};
+    }
     const f=facts(state),t=f.tactical;
     const winner=t.winner??(t.status==='proven_loss'?opponent(state.side_to_move):null);
     if(state.result)return {state,visits:0,value:0,evalValue:winnerValue(state,state.result.winner),expectedScore:null,scoreDist:null,scoreMin:null,edges:[],tactical:t,provenWinner:state.result.winner,fullyExplored:true,expanded:true};
+    let proof=this.v6?endgameProof(state,f,{root:isRoot,expired}):null;
+    if(this.v6&&!proof&&winner){
+      const moves=t.status==='immediate_win'?t.candidates:f.legal_actions;
+      proof={winner,moves,unique:t.status==='immediate_win'&&moves.length===1};
+    }
+    if(proof){
+      shared.entry.winner=proof.winner;
+      const edges=(isRoot?proof.moves:[]).map(action=>({action,prior:1/proof.moves.length,visits:0,value:0,child:null,expectedScore:null}));
+      return {state,visits:0,value:0,evalValue:winnerValue(state,proof.winner),expectedScore:null,scoreDist:null,scoreMin:null,edges,shared,
+        tactical:{...t,status:proof.winner===state.side_to_move?'proven_win':'proven_loss',winner:proof.winner},proof,provenWinner:proof.winner,fullyExplored:true,expanded:true};
+    }
     if(t.status==='proven_loss'&&!isRoot)return {state,visits:0,value:0,evalValue:-1,expectedScore:null,scoreDist:null,scoreMin:null,edges:[],tactical:t,provenWinner:winner,fullyExplored:true,expanded:true};
     let actions=t.status==='immediate_win'?t.candidates:t.status==='must_defend'?t.candidates:f.legal_actions;
     // Diagnostic continuation preserves every legal reply even after a proven loss.
     if(t.status==='proven_loss')actions=f.legal_actions;
     if(t.status==='immediate_win')return {state,visits:0,value:0,evalValue:1,expectedScore:null,scoreDist:null,scoreMin:null,edges:actions.map(action=>({action,prior:1/actions.length,visits:0,value:0,expectedScore:null,expectedScoreCount:0,scoreDistSum:null,scoreDistCount:0,scoreMin:null,child:null})),tactical:t,provenWinner:winner,fullyExplored:false,expanded:true};
     if(!actions.length)return {state,visits:0,value:0,evalValue:-1,expectedScore:null,scoreDist:null,scoreMin:null,edges:[],tactical:t,provenWinner:winner,fullyExplored:true,expanded:true};
-    const raw=this.evaluateAsync.length>=2?await this.evaluateAsync(state,positionPayload(state)):await this.evaluateAsync(state);
+    const input=!isRoot&&shared?shared.canonical:state;
+    let raw=!isRoot&&shared?.entry.evaluation;
+    if(!raw){
+      raw=this.evaluateAsync.length>=2?await this.evaluateAsync(input,positionPayload(input)):await this.evaluateAsync(input);
+      if(!isRoot&&shared)shared.entry.evaluation=raw;
+    }
+    if(!isRoot&&shared?.sym)raw=inverseTransformEvaluation(raw,shared.sym);
     if(!raw||!Array.isArray(raw.policy82)||raw.policy82.length!==82)throw new Error('evaluation policy82 must contain 82 values');
     if(!Number.isFinite(raw.value)||raw.value < -1||raw.value>1)throw new Error('evaluation value must be between -1 and 1');
     if(state===this.state)this.raw=raw;
@@ -68,7 +104,7 @@ export class BrowserSearch {
     const evalValue=t.status==='proven_loss'?-1:raw.value;
     const scoreDist=Array.isArray(raw.score_distribution)&&raw.score_distribution.length?Float64Array.from(raw.score_distribution):null;
     const scoreMin=Number.isFinite(raw.score_min)?raw.score_min:null;
-    return {state,visits:0,value:0,evalValue,expectedScore:Number.isFinite(raw.expected_score)?raw.expected_score:null,scoreDist,scoreMin,edges,tactical:t,provenWinner:winner,fullyExplored:false,expanded:true};
+    return {state,visits:0,value:0,evalValue,expectedScore:Number.isFinite(raw.expected_score)?raw.expected_score:null,scoreDist,scoreMin,edges,shared,tactical:t,forcedDefense:this.v6&&isRoot&&t.status==='must_defend'&&actions.length===1,provenWinner:winner,fullyExplored:false,expanded:true};
   }
   _provenTier(parent,edge,{respectBudget=false}={}){
     const pw=edge?.child?.provenWinner;
@@ -78,7 +114,9 @@ export class BrowserSearch {
   }
   _qForParent(parent,edge){
     if(edge.child?.provenWinner)return winnerValue(parent.state,edge.child.provenWinner);
-    return edge.visits?edge.value/edge.visits:0;
+    const shared=parent.shared;
+    const evidence=shared?.entry.actions.get(transformAction(edge.action,shared.sym));
+    return evidence?evidence.total/evidence.count:(edge.visits?edge.value/edge.visits:0);
   }
   _completedQValues(root){
     let visitedPriorSum=0,weightedQSum=0,totalChildVisits=0;
@@ -299,7 +337,8 @@ export class BrowserSearch {
   async _simulateLeaf(node,stopped=()=>false,forcedRootEdge=null){
     if(stopped())return null;
     if(node.state.result){node.provenWinner=node.state.result.winner;node.fullyExplored=true;const value=winnerValue(node.state,node.state.result.winner);node.visits++;node.value+=value;return {value,scoreDist:node.scoreDist,scoreMin:node.scoreMin,side:node.state.side_to_move};}
-    if(!node.expanded){const expanded=await this._expand(node.state,node===this.root);if(stopped())return null;Object.assign(node,expanded);node.visits++;node.value+=node.evalValue;return {value:node.evalValue,scoreDist:node.scoreDist,scoreMin:node.scoreMin,side:node.state.side_to_move};}
+    if(!node.expanded){const expanded=await this._expand(node.state,node===this.root,this._expired);if(stopped())return null;Object.assign(node,expanded);node.visits++;node.value+=node.evalValue;return {value:node.evalValue,scoreDist:node.scoreDist,scoreMin:node.scoreMin,side:node.state.side_to_move};}
+    if(node.proof||this.v6&&node.fullyExplored&&node.provenWinner)return {value:winnerValue(node.state,node.provenWinner),scoreDist:null,scoreMin:null,side:node.state.side_to_move};
     let best=forcedRootEdge;
     if(!best){
       const parentN=Math.max(1,node.visits),sqrt=Math.sqrt(parentN);let bestScore=-Infinity;
@@ -309,7 +348,7 @@ export class BrowserSearch {
         if(open.length)pool=open;
       }
       for(const edge of pool){
-        const q=edge.child?.provenWinner?winnerValue(node.state,edge.child.provenWinner):(edge.visits?edge.value/edge.visits:0);
+        const q=this._qForParent(node,edge);
         const score=q+this.cPuct*edge.prior*sqrt/(1+edge.visits);
         if(score>bestScore){bestScore=score;best=edge;}
       }
@@ -337,6 +376,13 @@ export class BrowserSearch {
       for(let i=0;i<alignedDist.length;i++)best.scoreDistSum[i]+=alignedDist[i];
       best.scoreDistCount=(best.scoreDistCount||0)+1;
     }
+    if(node.shared){
+      const {entry,sym}=node.shared;
+      const action=transformAction(best.action,sym);
+      const evidence=entry.actions.get(action)??{count:0,total:0};
+      evidence.count++;evidence.total+=parentValue;
+      entry.actions.set(action,evidence);
+    }
     best.visits++;best.value+=parentValue;node.visits++;node.value+=parentValue;
     if(node.edges&&node.edges.length>0){
       const turn=node.state.side_to_move;
@@ -354,9 +400,11 @@ export class BrowserSearch {
         }
       }
     }
+    if(node.shared&&node.provenWinner)node.shared.entry.winner=node.provenWinner;
     return {value:parentValue,scoreDist:alignedDist,scoreMin:childRes.scoreMin,side:node.state.side_to_move};
   }
   shouldStopEarly(){
+    if(this.root?.proof||this.root?.forcedDefense)return true;
     if(!this.root||this.root.visits===0)return false;
     if(this.root.fullyExplored)return true;
     if(this.root.provenWinner&&this.root.provenWinner===this.state.side_to_move)return true;
@@ -364,6 +412,7 @@ export class BrowserSearch {
   }
   stopReason(){
     if(this.state.result)return 'terminal';
+    if(this.root?.proof)return this.root.provenWinner===this.state.side_to_move?'proven_win':'proven_loss';
     if(!this.root||this.root.visits===0)return null;
     if(this.root.provenWinner===this.state.side_to_move&&(this._earlyStop||this.root.fullyExplored))return 'proven_win';
     if(this.root.fullyExplored){
@@ -374,9 +423,12 @@ export class BrowserSearch {
   }
   async advance(visits,{deadline=Infinity,stopped=()=>false,earlyStop=false,gumbelBudget=null}={}){
     if(!Number.isInteger(visits)||visits<0)throw new RangeError('visits must be a non-negative integer');
-    if(earlyStop)this._earlyStop=true;
+    if(earlyStop||this.v6)this._earlyStop=true;
+    this._expired=()=>stopped()||now()>=deadline;
     if(this.state.result)return this.snapshot();
-    if(!this.root){const root={state:this.state,visits:0,value:0,evalValue:0,expectedScore:null,edges:null,expanded:false,fullyExplored:false,provenWinner:null};Object.assign(root,await this._expand(this.state,true));if(stopped())return this.snapshot();this.root=root;this.exact=this.root.tactical;this.source=this.exact.status==='immediate_win'?'tactical':'network';}
+    if(!this.root){const root={state:this.state,visits:0,value:0,evalValue:0,expectedScore:null,edges:null,expanded:false,fullyExplored:false,provenWinner:null};Object.assign(root,await this._expand(this.state,true,this._expired));if(stopped())return this.snapshot();this.root=root;this.exact=this.root.tactical;this.source=this.exact.status==='immediate_win'?'tactical':'network';}
+    if(this.root.proof){this.source='tactical';return this.snapshot();}
+    if(this.root.forcedDefense)return this.snapshot();
     const target=this.rootVisits+visits;
     const initialRootVisits=this.rootVisits;
     if(this.searchMode==='gumbel'&&this.exact?.status!=='immediate_win'){
@@ -409,15 +461,19 @@ export class BrowserSearch {
     }
     return null;
   }
-  static fromNode(node,evaluateAsync,{cPuct=1.5,searchMode='puct',gumbelMaxConsidered=16,gumbelCVisit=50,gumbelCScale=1,rootSymmetryQuotient=false}={}){
+  static fromNode(node,evaluateAsync,{cPuct=1.5,searchMode='puct',gumbelMaxConsidered=16,gumbelCVisit=50,gumbelCScale=1,rootSymmetryQuotient=false,v6=false,shared=null}={}){
+    if(v6&&(node.provenWinner||node.tactical?.status==='must_defend'||stateStabilizer(node.state).length>1||facts(node.state).legal_actions.length<=6)){
+      return new BrowserSearch(node.state,evaluateAsync,{cPuct,searchMode,gumbelMaxConsidered,gumbelCVisit,gumbelCScale,rootSymmetryQuotient,v6});
+    }
     if(node.state.result===null&&node.expanded&&(!node.edges||!node.edges.length)){
       node.expanded=false;
       node.fullyExplored=false;
     }
-    if(node.edges?.length&&!node.edges.every(e=>e.child?.fullyExplored)){
+    if(!node.proof&&node.edges?.length&&!node.edges.every(e=>e.child?.fullyExplored)){
       node.fullyExplored=false;
     }
-    const search=new BrowserSearch(node.state,evaluateAsync,{cPuct,searchMode,gumbelMaxConsidered,gumbelCVisit,gumbelCScale,rootSymmetryQuotient});
+    const search=new BrowserSearch(node.state,evaluateAsync,{cPuct,searchMode,gumbelMaxConsidered,gumbelCVisit,gumbelCScale,rootSymmetryQuotient,v6});
+    if(shared)search.shared=shared;
     search.root=node;
     search.rootVisits=node.visits;
     search.exact=node.tactical??null;
@@ -483,7 +539,7 @@ export class BrowserSearch {
     }
     const winner=this.root.provenWinner??null;
     const chosen=useGumbel?(candidates.find(c=>c.action===selectedAction)||candidates[0]):(candidates.find(c=>c.visits)||candidates[0]);
-    const rootEstimate=Math.max(-1,Math.min(1,n?this.root.value/n:this.root.evalValue));
-    return {source:this.source,search_mode:this.searchMode,proven_winner:winner,stop_reason:this.stopReason(),exact:{source:winner?'tactical':null,status:this.exact?.status??null,proven_winner:winner,threats:this.exact?.threats??[]},recommended_action:chosen?.action??null,mcts:{root_visits:n,root_win_probability:(rootEstimate+1)/2,fully_explored:Boolean(this.root?.fullyExplored),candidates,principal_variation:pv,elapsed_seconds:(now()-this.started)/1000}};
+    const rootEstimate=this.root.provenWinner&&this.v6?winnerValue(this.state,this.root.provenWinner):Math.max(-1,Math.min(1,n?this.root.value/n:this.root.evalValue));
+    return {source:this.source,search_mode:this.searchMode,proven_winner:winner,stop_reason:this.stopReason(),exact:{source:winner?'tactical':null,status:this.exact?.status??null,score_bounds:this.root.proof?.bounds??null,unique_win:this.root.proof?.unique??false,proven_winner:winner,threats:this.exact?.threats??[]},recommended_action:chosen?.action??null,mcts:{root_visits:n,root_win_probability:(rootEstimate+1)/2,fully_explored:Boolean(this.root?.fullyExplored),candidates,principal_variation:pv,elapsed_seconds:(now()-this.started)/1000}};
   }
 }

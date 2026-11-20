@@ -1,10 +1,10 @@
 import {newStudy,addNode,pathTo,lineThrough,importDocument,blueEvaluation,studyForSave,resolveBranchLeaf,nextInBranch,branchLeaves,FORMAT} from './study.mjs?v=25';
-import {facts,stateGroups,territory,canonicalState,positionPayload} from './engine.mjs?v=25';
+import {facts,stateGroups,territory,canonicalState,positionPayload} from './engine.mjs?v=28';
 import {boardSvg,candidateOutcome,candidateShare} from './board.mjs?v=27';
 import {STORE,persistStudy,retryAnalysis} from './client.mjs?v=25';
 import {PracticeControls,missingNodes,normalizeBudget,analysisFloor,budgetPayload,budgetReached,budgetLabel,BUDGET_RANGE,BUDGET_DEFAULT,TEMPERATURE_DEFAULT,normalizeTemperature,pickAiAction} from './controls.mjs?v=25';
 import {timelineSvg} from './timeline.mjs?v=25';
-import {LocalEngine} from './local-client.mjs?v=25';
+import {LocalEngine} from './local-client.mjs?v=28';
 import {loadStaticConfig,loadStaticManifest} from './deployment.mjs?v=25';
 const staticOnly=document.documentElement?.dataset?.execution==='local';
 
@@ -632,6 +632,8 @@ function renderAnalysis(){
   const model=analysis.model;
   const text=[`출처: ${sourceLabel(analysis.source)}`,`탐색 알고리즘: ${isGumbel?'Gumbel (Sequential Halving)':'PUCT'}`,`대칭 추론: ${analysis.d4_samples??1}방향 (평균)`,`모델 원승률: ${pct(values.rawWin)}`,`예상 영토 차이(덤 전): ${signed(values.rawScore)}`,`탐색 시간: ${(analysis.cumulative_elapsed_seconds??analysis.mcts.elapsed_seconds).toFixed(3)}초`,
    `모델 SHA: ${model?.sha256?.slice(0,16)||'규칙 판정'}`,`국면: ${analysis.state_id.slice(0,16)}`,`실행: ${analysis.provider||analysis.execution||analysis.backend} · 규칙 ${analysis.position.ruleset_version}`,`전술 상태: ${analysis.exact?.status||'없음'} · 위협 ${(analysis.exact?.threats||[]).map(coord).join(', ')||'없음'}`,`정책 엔트로피: ${(-(analysis.raw_network?.policy||[]).reduce((sum,p)=>sum+(p>0?p*Math.log(p):0),0)).toFixed(3)}`,
+   ...(analysis.exact?.unique_win?['이길 수 있는 착점이 하나입니다.']:[]),
+   ...(analysis.exact?.score_bounds?[`계가 시 파란 성 기준 집 차이 범위(덤 전) ${analysis.exact.score_bounds.join(' ~ ')}`]:[]),
    ...(analysis.proven_winner?[`증명된 승자: ${analysis.proven_winner==='first'?'파란 성':'빨간 성'}`]:[])];
   if($('more-metrics'))$('more-metrics').replaceChildren(...text.map(t=>{const div=document.createElement('div');div.textContent=t;return div;}));
   const dist=analysis.raw_network?.score_distribution||[],max=Math.max(...dist,0.00001),step=300/Math.max(dist.length,1);

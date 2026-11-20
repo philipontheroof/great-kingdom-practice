@@ -38,9 +38,10 @@ export function initialState(setup={}){
 export function territory(board){const out=Array(AREA).fill(0),seen=new Set();for(let i=0;i<AREA;i++){if(board[i]!==0||seen.has(i))continue;const q=[i],component=[i];seen.add(i);const adj=new Set(),edges=new Set();for(let n=0;n<q.length;n++){const x=q[n],r=Math.floor(x/9),c=x%9;if(r===0)edges.add('t');if(r===8)edges.add('b');if(c===0)edges.add('l');if(c===8)edges.add('r');for(const j of neighbors(x)){if(board[j]===0&&!seen.has(j)){seen.add(j);q.push(j);component.push(j);}else if(board[j]===1||board[j]===2)adj.add(board[j]);}}if(edges.size===4)continue;if(!adj.has(2))for(const x of component)out[x]=1;else if(!adj.has(1))for(const x of component)out[x]=2;}return out;}
 function legal(s,terr=territory(s.board)){if(s.result)return [];const own=s.side_to_move==='first'?1:2,opp=3-own,out=[];for(let i=0;i<AREA;i++)if(!s.board[i]&&terr[i]!==opp&&!(terr[i]===own&&s.ruleset_version===RULESET))out.push(i);out.push(PASS);return out;}
 function playUnchecked(s,a){if(a===PASS){if(s.previous_move_was_pass){const t=territory(s.board),first=t.filter(x=>x===1).length,second=t.filter(x=>x===2).length;return {...s,result:{winner:first-second>s.komi?'first':'second',reason:'pass_score'}};}return {...s,side_to_move:s.side_to_move==='first'?'second':'first',previous_move_was_pass:true};}const board=s.board.slice(),mover=s.side_to_move,me=mover==='first'?1:2,opp=3-me;board[a]=me;const provisional={...s,board,previous_move_was_pass:false};const checked=new Set();for(const j of neighbors(a))if(board[j]===opp&&!checked.has(j)){const g=group(board,j);g.stones.forEach(x=>checked.add(x));if(!g.liberties.length)return {...provisional,result:{winner:mover,reason:'siege'}};}const own=group(board,a);if(!own.liberties.length)return {...provisional,result:{winner:mover==='first'?'second':'first',reason:'siege'}};return {...provisional,side_to_move:mover==='first'?'second':'first'};}
+export const legalActions=legal;
 export function playAction(s,a){if(!Number.isInteger(a)||a<0||a>PASS)throw Error('action must be integer 0..81');if(!legal(s).includes(a))throw Error('illegal move');return playUnchecked(s,a);}
-function immediateWins(s){const opp=s.side_to_move==='first'?2:1,wins=[];for(const g of stateGroups(s))if(g.color===opp&&g.liberties.length===1){const a=g.liberties[0];if(legal(s).includes(a)){const next=playUnchecked(s,a);if(next.result?.winner===s.side_to_move&&next.result.reason==='siege'&&!wins.includes(a))wins.push(a);}}return wins.sort((a,b)=>a-b);}
-export function facts(s){const t=territory(s.board),legal_actions=legal(s,t),groups=stateGroups(s).map(g=>({...g,protected:g.stones.some(i=>neighbors(i).some(j=>t[j]===g.color))}));let tactical;if(s.result)tactical={status:'terminal',candidates:[],threats:[],winner:s.result.winner};else {const wins=immediateWins(s);if(wins.length)tactical={status:'immediate_win',candidates:wins,threats:[],winner:s.side_to_move};else {const opp=s.side_to_move==='first'?'second':'first',os={...s,side_to_move:opp,previous_move_was_pass:false},threats=immediateWins(os);if(!threats.length)tactical={status:'quiet',candidates:legal_actions,threats:[],winner:null};else {const candidates=legal_actions.filter(a=>{const n=playUnchecked(s,a);return (n.result?.winner===s.side_to_move)||(!n.result&&!immediateWins(n).length);});tactical=candidates.length?{status:'must_defend',candidates,threats,winner:null}:{status:'proven_loss',candidates:[],threats,winner:opp};}}}return {territory:t,legal_actions,groups,tactical};}
+function immediateWins(s,groups=stateGroups(s),actions=legal(s)){const opp=s.side_to_move==='first'?2:1,wins=[];for(const g of groups)if(g.color===opp&&g.liberties.length===1){const a=g.liberties[0];if(actions.includes(a)){const next=playUnchecked(s,a);if(next.result?.winner===s.side_to_move&&next.result.reason==='siege'&&!wins.includes(a))wins.push(a);}}return wins.sort((a,b)=>a-b);}
+export function facts(s){const t=territory(s.board),legal_actions=legal(s,t),groups=stateGroups(s).map(g=>({...g,protected:g.stones.some(i=>neighbors(i).some(j=>t[j]===g.color))}));let tactical;if(s.result)tactical={status:'terminal',candidates:[],threats:[],winner:s.result.winner};else {const wins=immediateWins(s,groups,legal_actions);if(wins.length)tactical={status:'immediate_win',candidates:wins,threats:[],winner:s.side_to_move};else {const opp=s.side_to_move==='first'?'second':'first',os={...s,side_to_move:opp,previous_move_was_pass:false},threats=immediateWins(os,groups,legal(os,t));if(!threats.length)tactical={status:'quiet',candidates:legal_actions,threats:[],winner:null};else {const candidates=legal_actions.filter(a=>{const n=playUnchecked(s,a);return (n.result?.winner===s.side_to_move)||(!n.result&&!immediateWins(n).length);});tactical=candidates.length?{status:'must_defend',candidates,threats,winner:null}:{status:'proven_loss',candidates:[],threats,winner:opp};}}}return {territory:t,legal_actions,groups,tactical};}
 export function features(s){const t=territory(s.board),groups=stateGroups(s).map(g=>({...g,protected:g.stones.some(i=>neighbors(i).some(j=>t[j]===g.color))})),spatial=new Float32Array(12*AREA),me=s.side_to_move==='first'?1:2,opp=3-me;for(let i=0;i<AREA;i++){const c=s.board[i];if(c===3)spatial[4*AREA+i]=1;if(t[i]===(me===1?1:2))spatial[5*AREA+i]=1;else if(t[i]===(opp===1?1:2))spatial[6*AREA+i]=1;}for(const g of groups){const protectedGroup=g.protected;for(const i of g.stones){const category=g.color===me?(protectedGroup?0:1):(protectedGroup?2:3);spatial[category*AREA+i]=1;spatial[11*AREA+i]=g.stones.length/81;}if(protectedGroup)continue;const l=g.liberties.length;if(l>0&&l<=3)for(const i of g.stones)spatial[(6+l)*AREA+i]=1;for(const i of g.stones)spatial[10*AREA+i]=l/81;}const my=t.filter(x=>x===(me===1?1:2)).length,other=t.filter(x=>x===(opp===1?1:2)).length;return {spatial,global_features:new Float32Array([(my-other)/81,(me===2?s.komi:-s.komi)/81,+s.previous_move_was_pass])};}
 export function canonicalState(s){const hex=floatHex(s.komi);return JSON.stringify({board:s.board.join(''),komi:hex,previous_move_was_pass:s.previous_move_was_pass,result:s.result?{reason:s.result.reason,winner:s.result.winner}:null,ruleset:s.ruleset_version,side_to_move:s.side_to_move});}
 function floatHex(x){if(x===0)return '0x0.0p+0';const b=new ArrayBuffer(8),v=new DataView(b);v.setFloat64(0,x,false);const bits=v.getBigUint64(0,false),negative=Boolean(bits>>63n),exponent=Number((bits>>52n)&0x7ffn),fraction=(bits&0xfffffffffffffn).toString(16).padStart(13,'0'),sign=negative?'-':'';if(exponent===0)return `${sign}0x0.${fraction}p-1022`;const power=exponent-1023;return `${sign}0x1.${fraction}p${power>=0?'+':''}${power}`;}
@@ -125,8 +126,8 @@ export function inverseTransformEvaluation(raw,sym){
   }
   return {...raw,policy82,ownership,territory_probabilities};
 }
-export function sampleD4Orientations(state,maxSamples=1,rng=Math.random){
-  const {state:canon,sym:toCanon,stabilizer}=canonicalD4State(state);
+export function sampleD4Orientations(state,maxSamples=1,rng=Math.random,canonical=canonicalD4State(state)){
+  const {state:canon,sym:toCanon,stabilizer}=canonical;
   const byBoard=new Map();
   for(let sym=0;sym<8;sym++){
     const ts=transformState(canon,sym),bkey=ts.board.join('');
@@ -177,4 +178,63 @@ export function averageD4Evaluations(groupEvals){
     if(hasScoreDist)for(let i=0;i<scoreDist.length;i++)scoreDist[i]+=ev.score_distribution[i]/count;
   }
   return {...first,policy82,value:Math.max(-1,Math.min(1,value)),win_probability:winProb,expected_score:expScore,score_distribution:scoreDist,ownership,territory_probabilities:terr};
+}
+
+// A score bound is conditional on both players reaching scoring. The protected
+// liberties separately certify that the leader can force that result or better.
+export function endgameProof(state, position=facts(state), {root=true, expired=()=>false}={}){
+  if(state.result || state.ruleset_version!==RULESET || state.extra_moves_remaining)return null;
+  const {territory:t, legal_actions:actions, groups}=position;
+  function solveSmall(limit){
+    const memo=new Map();
+    let remaining=limit;
+    function solve(s){
+      const key=canonicalState(s);
+      if(memo.has(key))return memo.get(key);
+      if(--remaining<0||expired())return null;
+      let proof;
+      if(s.result){
+        const cells=s.result.reason==='pass_score'?territory(s.board):null;
+        const margin=cells?cells.filter(x=>x===1).length-cells.filter(x=>x===2).length:null;
+        proof={winner:s.result.winner,margin};
+      }else{
+        const children=[];
+        for(const action of legal(s)){
+          const child=solve(playUnchecked(s,action));
+          if(!child)return null;
+          children.push({action,...child});
+        }
+        const wins=children.filter(child=>child.winner===s.side_to_move);
+        let options=wins.length?wins:children;
+        let margin=null;
+        if(options.every(child=>child.margin!==null)){
+          const choose=s.side_to_move==='first'?Math.max:Math.min;
+          margin=choose(...options.map(child=>child.margin));
+          options=options.filter(child=>child.margin===margin);
+        }
+        proof={winner:options[0].winner,margin,moves:options.map(child=>child.action),unique:wins.length===1};
+      }
+      memo.set(key,proof);
+      return proof;
+    }
+    const exact=solve(state);
+    return exact?{...exact,bounds:exact.margin===null?null:[exact.margin,exact.margin]}:null;
+  }
+  if(root&&actions.length<=6){
+    const exact=solveSmall(1024);
+    if(exact)return exact;
+  }
+  if(position.tactical.winner)return null;
+  const difference=t.filter(x=>x===1).length-t.filter(x=>x===2).length;
+  for(const color of [1,2]){
+    if(color===1?difference<=state.komi:difference>state.komi)continue;
+    if(groups.some(g=>g.color===color&&!g.liberties.some(x=>t[x]===color)))continue;
+    const open=actions.filter(a=>a!==PASS);
+    const possible=color=>open.filter(a=>neighbors(a).every(i=>state.board[i]!==3-color)).length;
+    const bounds=[difference-possible(2),difference+possible(1)];
+    if(color===1?bounds[0]<=state.komi:bounds[1]>state.komi)continue;
+    const winner=color===1?'first':'second';
+    return {winner,bounds,margin:null,unique:false,moves:winner===state.side_to_move?[PASS]:actions};
+  }
+  return !root&&actions.length<=4?solveSmall(64):null;
 }
